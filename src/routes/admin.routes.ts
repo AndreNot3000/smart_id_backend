@@ -24,7 +24,7 @@ const createLecturerSchema = z.object({
   email: z.string().email('Invalid email address'),
   department: z.string().min(1, 'Department is required'),
   role: z.enum(['Prof', 'Dr', 'Mr', 'Mrs', 'Ms'], {
-    errorMap: () => ({ message: 'Role must be one of: Prof, Dr, Mr, Mrs, Ms' })
+    message: 'Role must be one of: Prof, Dr, Mr, Mrs, Ms'
   }),
   specialization: z.string().optional(),
 });
