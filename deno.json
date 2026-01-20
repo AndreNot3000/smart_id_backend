@@ -1,0 +1,23 @@
+{
+  "tasks": {
+    "dev": "deno run --allow-net --allow-read --allow-env --allow-write --watch main.ts",
+    "start": "deno run --allow-net --allow-read --allow-env --allow-write main.ts",
+    "migrate": "deno run --allow-net --allow-read --allow-env --allow-write src/database/migrate.ts"
+  },
+  "imports": {
+    "hono": "https://deno.land/x/hono@v3.12.8/mod.ts",
+    "hono/middleware": "https://deno.land/x/hono@v3.12.8/middleware.ts",
+    "hono/jwt": "https://deno.land/x/hono@v3.12.8/middleware.ts",
+    "postgres": "https://deno.land/x/postgres@v0.17.0/mod.ts",
+    "bcrypt": "https://deno.land/x/bcrypt@v0.4.1/mod.ts",
+    "djwt": "https://deno.land/x/djwt@v3.0.1/mod.ts",
+    "zod": "https://deno.land/x/zod@v3.22.4/mod.ts",
+    "qrcode": "https://deno.land/x/qrcode@v2.0.0/mod.ts",
+    "std": "https://deno.land/std@0.208.0/"
+  },
+  "compilerOptions": {
+    "allowJs": true,
+    "lib": ["deno.window"],
+    "strict": true
+  }
+}

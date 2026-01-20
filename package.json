@@ -1,0 +1,27 @@
+{
+  "name": "campus-id-backend",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun src/index.ts"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/bun": "latest",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.10.2"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@types/nodemailer": "^7.0.5",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.2.3",
+    "hono": "^4.11.4",
+    "jsonwebtoken": "^9.0.3",
+    "mongodb": "^7.0.0",
+    "nodemailer": "^7.0.12",
+    "zod": "^4.3.5"
+  }
+}
