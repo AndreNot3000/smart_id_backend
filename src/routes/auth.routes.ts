@@ -162,10 +162,15 @@ auth.post('/admin/register', async (c) => {
 // Login endpoint
 auth.post('/login', async (c) => {
   try {
+    console.log('🔍 Login attempt started');
     const body = await c.req.json();
+    console.log('📝 Request body:', { email: body.email, userType: body.userType });
+    
     const data = loginSchema.parse(body);
+    console.log('✅ Validation passed');
 
     const usersCollection = getUsersCollection();
+    console.log('📊 Database connection obtained');
 
     // Find user by email OR student ID (for students) OR lecturer ID (for lecturers)
     let user;
@@ -188,28 +193,47 @@ auth.post('/login', async (c) => {
       });
     } else {
       // For admins, only check email
+      console.log('🔍 Searching for admin user:', { email: data.email, userType: data.userType });
       user = await usersCollection.findOne({ 
         email: data.email, 
         userType: data.userType 
       });
     }
 
+    console.log('👤 User found:', user ? 'Yes' : 'No');
+    if (user) {
+      console.log('📋 User details:', {
+        id: user._id,
+        email: user.email,
+        userType: user.userType,
+        status: user.status,
+        emailVerified: user.emailVerified
+      });
+    }
+
     if (!user) {
+      console.log('❌ User not found');
       return c.json({ error: 'Invalid credentials' }, 401);
     }
 
     // Get institution details
     const institutionsCollection = getInstitutionsCollection();
     const institution = await institutionsCollection.findOne({ _id: user.institutionId });
+    console.log('🏫 Institution found:', institution ? institution.name : 'No');
 
     // Verify password
+    console.log('🔐 Verifying password...');
     const isValidPassword = await AuthService.verifyPassword(data.password, user.passwordHash);
+    console.log('🔐 Password valid:', isValidPassword);
+    
     if (!isValidPassword) {
+      console.log('❌ Invalid password');
       return c.json({ error: 'Invalid credentials' }, 401);
     }
 
     // Check if email is verified
     if (!user.emailVerified) {
+      console.log('❌ Email not verified');
       return c.json({ 
         error: 'Email not verified', 
         requiresVerification: true,
@@ -219,17 +243,21 @@ auth.post('/login', async (c) => {
 
     // Check if user is active
     if (user.status !== 'active') {
+      console.log('❌ User not active, status:', user.status);
       return c.json({ error: 'Account is not active' }, 403);
     }
 
     // Generate tokens
+    console.log('🎫 Generating tokens...');
     const tokens = await AuthService.generateTokens(
       user._id.toString(), 
       user.userType, 
       user.institutionId.toString(), 
       user.email
     );
+    console.log('✅ Tokens generated successfully');
 
+    console.log('🎉 Login successful');
     return c.json({
       message: 'Login successful',
       user: {
@@ -249,8 +277,10 @@ auth.post('/login', async (c) => {
     });
 
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('❌ Login error:', error);
+    console.error('🔍 Error stack:', error.stack);
     if (error instanceof z.ZodError) {
+      console.log('📝 Validation error details:', error.issues);
       return c.json({ 
         error: 'Validation error', 
         details: error.issues.map(issue => ({
