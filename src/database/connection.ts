@@ -7,17 +7,48 @@ let client: MongoClient;
 let db: Db;
 
 export async function initDatabase() {
-  const mongoUrl = process.env.MONGODB_URL || 'mongodb://localhost:27017';
-  const dbName = process.env.DB_NAME || 'campus_id_saas';
-  
-  client = new MongoClient(mongoUrl);
-  await client.connect();
-  db = client.db(dbName);
-  
-  // Create indexes
-  await createIndexes();
-  
-  console.log('✅ Connected to MongoDB');
+  try {
+    const mongoUrl = process.env.MONGODB_URL || 'mongodb://localhost:27017';
+    const dbName = process.env.DB_NAME || 'campus_id_saas';
+    
+    console.log('🔄 Connecting to MongoDB...');
+    console.log('📍 Database name:', dbName);
+    // Don't log full URL for security, just check if it's Atlas
+    console.log('🌐 Connection type:', mongoUrl.includes('mongodb+srv') ? 'MongoDB Atlas' : 'Local MongoDB');
+    
+    // MongoDB connection options for better reliability
+    const options = {
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 10000, // Increased timeout
+      socketTimeoutMS: 45000,
+      connectTimeoutMS: 10000,
+      family: 4, // Use IPv4, skip trying IPv6
+      retryWrites: true,
+      w: 'majority'
+    };
+    
+    client = new MongoClient(mongoUrl, options);
+    await client.connect();
+    
+    // Test the connection
+    await client.db(dbName).admin().ping();
+    console.log('🏓 MongoDB ping successful');
+    
+    db = client.db(dbName);
+    
+    // Create indexes
+    await createIndexes();
+    
+    console.log('✅ Connected to MongoDB successfully');
+  } catch (error) {
+    console.error('❌ MongoDB connection failed:', error.message);
+    console.error('🔍 Error details:', {
+      name: error.name,
+      code: error.code,
+      codeName: error.codeName
+    });
+    throw error;
+  }
 }
 
 export function getDatabase(): Db {

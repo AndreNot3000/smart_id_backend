@@ -46,9 +46,22 @@ BACKEND_URL=https://your-backend-domain.onrender.com
 
 ## Test Your Deployment:
 
-Once deployed, test with:
+### ⚠️ **Important: Render Free Tier Behavior**
+- Free instances "sleep" after 15 minutes of inactivity
+- First request after sleep takes 50+ seconds to wake up
+- You may get 502 errors during wake-up - this is normal!
+
+### Testing Steps:
+1. **Wake up the server** (may take 50+ seconds):
 ```bash
-curl https://your-app-name.onrender.com
+curl https://smart-id-exvb.onrender.com
+```
+
+2. **Wait 1-2 minutes if you get 502 errors**
+
+3. **Test again** - should work now:
+```bash
+curl https://smart-id-exvb.onrender.com
 ```
 
 Expected response:
@@ -59,6 +72,9 @@ Expected response:
   "status": "healthy"
 }
 ```
+
+### Keep Service Warm (Optional):
+Use services like UptimeRobot or cron-job.org to ping your service every 10-14 minutes to prevent cold starts.
 
 ## Common Issues:
 
