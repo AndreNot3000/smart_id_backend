@@ -1,0 +1,132 @@
+{
+  "info": {
+    "name": "Campus ID SAAS API",
+    "description": "Complete API collection for Campus ID system",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://smart-id-exvb.onrender.com",
+      "type": "string"
+    },
+    {
+      "key": "superAdminKey",
+      "value": "andrenaline",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}",
+          "host": ["{{baseUrl}}"]
+        }
+      }
+    },
+    {
+      "name": "2. Get Institutions",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/institutions",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "institutions"]
+        }
+      }
+    },
+    {
+      "name": "3. Create Institution (Super Admin)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Super-Admin-Key",
+            "value": "{{superAdminKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Test University\",\n  \"code\": \"TEST\",\n  \"domain\": \"test.edu\",\n  \"address\": \"123 Test Street\",\n  \"phone\": \"+1234567890\",\n  \"email\": \"info@test.edu\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/superadmin/institutions",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "superadmin", "institutions"]
+        }
+      }
+    },
+    {
+      "name": "4. Register Admin",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"institutionCode\": \"TEST\",\n  \"adminFirstName\": \"Andre\",\n  \"adminLastName\": \"Olumide\",\n  \"adminEmail\": \"andreolumide@gmail.com\",\n  \"password\": \"Hackless#12345\",\n  \"confirmPassword\": \"Hackless#12345\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/admin/register",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "admin", "register"]
+        }
+      }
+    },
+    {
+      "name": "5. Verify OTP",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"andreolumide@gmail.com\",\n  \"code\": \"123456\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/verify-otp",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "verify-otp"]
+        }
+      }
+    },
+    {
+      "name": "6. Admin Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"andreolumide@gmail.com\",\n  \"password\": \"Hackless#12345\",\n  \"userType\": \"admin\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "login"]
+        }
+      }
+    }
+  ]
+}

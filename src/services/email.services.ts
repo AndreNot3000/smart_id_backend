@@ -1,24 +1,49 @@
 import nodemailer from 'nodemailer';
 
-// Create transporter for Mailtrap
+// Create transporter for Mailtrap (supports both Sandbox and Email API)
 const createTransporter = () => {
   console.log('📧 Creating email transporter...');
-  console.log('🔧 SMTP Config:', {
-    host: process.env.SMTP_HOST || 'sandbox.smtp.mailtrap.io',
-    port: parseInt(process.env.SMTP_PORT || '2525'),
-    user: process.env.SMTP_USER ? '***' + process.env.SMTP_USER.slice(-4) : 'NOT SET',
-    pass: process.env.SMTP_PASS ? '***' + process.env.SMTP_PASS.slice(-4) : 'NOT SET'
-  });
+  
+  // Check if we're using Email API or Sandbox
+  const isEmailAPI = process.env.MAILTRAP_API_TOKEN;
+  
+  if (isEmailAPI) {
+    console.log('🚀 Using Mailtrap Email API (Production)');
+    console.log('🔧 API Config:', {
+      host: 'live.smtp.mailtrap.io',
+      port: 587,
+      user: 'api',
+      token: process.env.MAILTRAP_API_TOKEN ? '***' + process.env.MAILTRAP_API_TOKEN.slice(-4) : 'NOT SET'
+    });
 
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'sandbox.smtp.mailtrap.io',
-    port: parseInt(process.env.SMTP_PORT || '2525'),
-    secure: false, // Mailtrap uses port 2525 (not secure)
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
+    return nodemailer.createTransport({
+      host: 'live.smtp.mailtrap.io',
+      port: 587,
+      secure: false,
+      auth: {
+        user: 'api',
+        pass: process.env.MAILTRAP_API_TOKEN,
+      },
+    });
+  } else {
+    console.log('🧪 Using Mailtrap Sandbox (Testing)');
+    console.log('🔧 SMTP Config:', {
+      host: process.env.SMTP_HOST || 'sandbox.smtp.mailtrap.io',
+      port: parseInt(process.env.SMTP_PORT || '2525'),
+      user: process.env.SMTP_USER ? '***' + process.env.SMTP_USER.slice(-4) : 'NOT SET',
+      pass: process.env.SMTP_PASS ? '***' + process.env.SMTP_PASS.slice(-4) : 'NOT SET'
+    });
+
+    return nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'sandbox.smtp.mailtrap.io',
+      port: parseInt(process.env.SMTP_PORT || '2525'),
+      secure: false, // Mailtrap uses port 2525 (not secure)
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+  }
 };
 
 // Email service for sending OTP and other notifications
@@ -75,8 +100,12 @@ export async function sendOTPEmail(email: string, code: string, purpose: string)
       </div>
     `;
 
+    const fromEmail = process.env.MAILTRAP_API_TOKEN 
+      ? `"Campus ID System" <noreply@${process.env.MAILTRAP_DOMAIN || 'yourdomain.com'}>` 
+      : `"Campus ID System" <${process.env.SMTP_USER}>`;
+
     await transporter.sendMail({
-      from: `"Campus ID System" <${process.env.SMTP_USER}>`,
+      from: fromEmail,
       to: email,
       subject,
       html,
