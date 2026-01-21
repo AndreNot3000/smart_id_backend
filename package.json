@@ -1,9 +1,17 @@
 {
   "name": "campus-id-backend",
-  "module": "index.ts",
+  "version": "1.0.0",
+  "description": "Campus ID SAAS Backend API",
+  "main": "main.ts",
   "type": "module",
   "scripts": {
-    "start": "bun src/index.ts"
+    "start": "bun main.ts",
+    "dev": "bun --watch main.ts",
+    "build": "echo 'No build step required for Bun'",
+    "test": "echo 'No tests specified'"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
