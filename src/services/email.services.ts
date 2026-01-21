@@ -2,6 +2,14 @@ import nodemailer from 'nodemailer';
 
 // Create transporter for Mailtrap
 const createTransporter = () => {
+  console.log('📧 Creating email transporter...');
+  console.log('🔧 SMTP Config:', {
+    host: process.env.SMTP_HOST || 'sandbox.smtp.mailtrap.io',
+    port: parseInt(process.env.SMTP_PORT || '2525'),
+    user: process.env.SMTP_USER ? '***' + process.env.SMTP_USER.slice(-4) : 'NOT SET',
+    pass: process.env.SMTP_PASS ? '***' + process.env.SMTP_PASS.slice(-4) : 'NOT SET'
+  });
+
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'sandbox.smtp.mailtrap.io',
     port: parseInt(process.env.SMTP_PORT || '2525'),
@@ -16,11 +24,15 @@ const createTransporter = () => {
 // Email service for sending OTP and other notifications
 export async function sendOTPEmail(email: string, code: string, purpose: string): Promise<void> {
   try {
+    console.log(`📧 Attempting to send ${purpose} email to ${email}`);
     const transporter = createTransporter();
 
     const subject = purpose === 'email_verification' 
       ? 'Campus ID - Email Verification Code' 
       : 'Campus ID - Password Reset Code';
+      
+    console.log('📝 Email subject:', subject);
+    console.log('🔢 OTP code:', code);
       
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -70,9 +82,14 @@ export async function sendOTPEmail(email: string, code: string, purpose: string)
       html,
     });
 
-    console.log(`✅ ${purpose} email sent to ${email}`);
+    console.log(`✅ ${purpose} email sent successfully to ${email}`);
   } catch (error) {
     console.error(`❌ Failed to send ${purpose} email to ${email}:`, error);
+    console.error('🔍 Error details:', {
+      name: error.name,
+      message: error.message,
+      code: error.code
+    });
     // Don't throw error to prevent breaking the flow
     // In production, you might want to implement retry logic
   }
