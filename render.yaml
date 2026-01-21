@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: campus-id-backend
+    runtime: bun
+    buildCommand: bun install
+    startCommand: bun main.ts
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DB_NAME
+        value: campus_id_saas
+      # Add your environment variables in Render dashboard:
+      # MONGODB_URL, JWT_SECRET, JWT_REFRESH_SECRET, SUPER_ADMIN_KEY
+      # SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS
+      # CORS_ORIGIN, FRONTEND_URL, BACKEND_URL
