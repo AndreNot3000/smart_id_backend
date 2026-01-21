@@ -24,6 +24,9 @@ const createTransporter = () => {
         user: 'api',
         pass: process.env.MAILTRAP_API_TOKEN,
       },
+      tls: {
+        rejectUnauthorized: false
+      }
     });
   } else {
     console.log('🧪 Using Mailtrap Sandbox (Testing)');
@@ -101,7 +104,7 @@ export async function sendOTPEmail(email: string, code: string, purpose: string)
     `;
 
     const fromEmail = process.env.MAILTRAP_API_TOKEN 
-      ? `"Campus ID System" <noreply@${process.env.MAILTRAP_DOMAIN || 'yourdomain.com'}>` 
+      ? `"Campus ID System" <hello@demomailtrap.com>` // Use Mailtrap's demo domain
       : `"Campus ID System" <${process.env.SMTP_USER}>`;
 
     await transporter.sendMail({
