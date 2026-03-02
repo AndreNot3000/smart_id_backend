@@ -1,21 +1,14 @@
 import nodemailer from 'nodemailer';
+import { getConfig } from '../config/constants.js';
 
 // Create transporter for Mailtrap (supports both Sandbox and Email API)
 const createTransporter = () => {
-  console.log('📧 Creating email transporter...');
+  const config = getConfig();
   
   // Check if we're using Email API or Sandbox
   const isEmailAPI = process.env.MAILTRAP_API_TOKEN;
   
   if (isEmailAPI) {
-    console.log('🚀 Using Mailtrap Email API (Production)');
-    console.log('🔧 API Config:', {
-      host: 'live.smtp.mailtrap.io',
-      port: 587,
-      user: 'api',
-      token: process.env.MAILTRAP_API_TOKEN ? '***' + process.env.MAILTRAP_API_TOKEN.slice(-4) : 'NOT SET'
-    });
-
     return nodemailer.createTransport({
       host: 'live.smtp.mailtrap.io',
       port: 587,
@@ -27,23 +20,15 @@ const createTransporter = () => {
       tls: {
         rejectUnauthorized: false
       },
-      connectionTimeout: 60000, // 60 seconds
-      greetingTimeout: 30000,   // 30 seconds
-      socketTimeout: 60000      // 60 seconds
+      connectionTimeout: 60000,
+      greetingTimeout: 30000,
+      socketTimeout: 60000
     });
   } else {
-    console.log('🧪 Using Mailtrap Sandbox (Testing)');
-    console.log('🔧 SMTP Config:', {
-      host: process.env.SMTP_HOST || 'sandbox.smtp.mailtrap.io',
-      port: parseInt(process.env.SMTP_PORT || '2525'),
-      user: process.env.SMTP_USER ? '***' + process.env.SMTP_USER.slice(-4) : 'NOT SET',
-      pass: process.env.SMTP_PASS ? '***' + process.env.SMTP_PASS.slice(-4) : 'NOT SET'
-    });
-
     return nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'sandbox.smtp.mailtrap.io',
       port: parseInt(process.env.SMTP_PORT || '2525'),
-      secure: false, // Mailtrap uses port 2525 (not secure)
+      secure: false,
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
@@ -55,15 +40,11 @@ const createTransporter = () => {
 // Email service for sending OTP and other notifications
 export async function sendOTPEmail(email: string, code: string, purpose: string): Promise<void> {
   try {
-    console.log(`📧 Attempting to send ${purpose} email to ${email}`);
     const transporter = createTransporter();
 
     const subject = purpose === 'email_verification' 
       ? 'Campus ID - Email Verification Code' 
       : 'Campus ID - Password Reset Code';
-      
-    console.log('📝 Email subject:', subject);
-    console.log('🔢 OTP code:', code);
       
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -99,15 +80,14 @@ export async function sendOTPEmail(email: string, code: string, purpose: string)
         
         <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
           <p style="color: #999; font-size: 12px; margin: 0;">
-
-          Campus ID System - Secure Student Management Platform
+            Campus ID System - Secure Student Management Platform
           </p>
         </div>
       </div>
     `;
 
     const fromEmail = process.env.MAILTRAP_API_TOKEN 
-      ? `"Campus ID System" <hello@demomailtrap.com>` // Use Mailtrap's demo domain
+      ? `"Campus ID System" <hello@demomailtrap.com>`
       : `"Campus ID System" <${process.env.SMTP_USER}>`;
 
     await transporter.sendMail({
@@ -118,21 +98,14 @@ export async function sendOTPEmail(email: string, code: string, purpose: string)
     });
 
     console.log(`✅ ${purpose} email sent successfully to ${email}`);
-  } catch (error) {
-    console.error(`❌ Failed to send ${purpose} email to ${email}:`, error);
-    console.error('🔍 Error details:', {
-      name: error.name,
-      message: error.message,
-      code: error.code
-    });
+  } catch (error: any) {
+    console.error(`❌ Failed to send ${purpose} email to ${email}:`, error.message);
     // Don't throw error to prevent breaking the flow
-    // In production, you might want to implement retry logic
   }
 }
 
 export async function sendWelcomeEmail(email: string, name: string, userType: string): Promise<void> {
   console.log(`📧 Welcome email for ${name} (${email}) - ${userType}`);
-  
   // Implement welcome email logic here
 }
 
@@ -146,10 +119,24 @@ export async function sendStudentActivationEmail(
   institutionName: string
 ): Promise<void> {
   try {
+    const config = getConfig();
     const transporter = createTransporter();
     
     const activationLink = `${process.env.BACKEND_URL}/api/auth/verify-email?token=${verificationToken}&email=${encodeURIComponent(email)}`;
     const loginUrl = `${process.env.FRONTEND_URL}/login`;
+    
+    // Only include debug info in development
+    const debugSection = config.security.includeDebugInEmails ? `
+        <!-- Debug Info (Development Only) -->
+        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #dee2e6;">
+          <h4 style="color: #6c757d; margin-top: 0; font-size: 14px;">🔧 Debug Information</h4>
+          <p style="color: #6c757d; font-size: 12px; font-family: monospace; margin: 5px 0;">
+            <strong>Token:</strong> ${verificationToken}<br>
+            <strong>Email:</strong> ${email}<br>
+            <strong>Link:</strong> <a href="${activationLink}" style="color: #007bff; word-break: break-all;">${activationLink}</a>
+          </p>
+        </div>
+    ` : '';
     
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f8f9fa;">
@@ -200,6 +187,8 @@ export async function sendStudentActivationEmail(
             </p>
           </div>
         </div>
+        
+        ${debugSection}
         
         <!-- Next Steps -->
         <div style="background: white; padding: 25px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
@@ -257,10 +246,9 @@ export async function sendStudentActivationEmail(
     });
 
     console.log(`✅ Student activation email sent to ${email}`);
-    console.log(`🔗 Activation link: ${activationLink}`);
-  } catch (error) {
-    console.error(`❌ Failed to send activation email to ${email}:`, error);
-    // Don't throw error to prevent breaking the flow
+  } catch (error: any) {
+    console.error(`❌ Failed to send activation email to ${email}:`, error.message);
+    throw error; // Throw error so caller knows email failed
   }
 }
 
@@ -276,10 +264,24 @@ export async function sendLecturerActivationEmail(
   department: string
 ): Promise<void> {
   try {
+    const config = getConfig();
     const transporter = createTransporter();
     
     const activationLink = `${process.env.BACKEND_URL}/api/auth/verify-email?token=${verificationToken}&email=${encodeURIComponent(email)}`;
     const loginUrl = `${process.env.FRONTEND_URL}/login`;
+    
+    // Only include debug info in development
+    const debugSection = config.security.includeDebugInEmails ? `
+        <!-- Debug Info (Development Only) -->
+        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #dee2e6;">
+          <h4 style="color: #6c757d; margin-top: 0; font-size: 14px;">🔧 Debug Information</h4>
+          <p style="color: #6c757d; font-size: 12px; font-family: monospace; margin: 5px 0;">
+            <strong>Token:</strong> ${verificationToken}<br>
+            <strong>Email:</strong> ${email}<br>
+            <strong>Link:</strong> <a href="${activationLink}" style="color: #007bff; word-break: break-all;">${activationLink}</a>
+          </p>
+        </div>
+    ` : '';
     
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f8f9fa;">
@@ -339,6 +341,8 @@ export async function sendLecturerActivationEmail(
           </div>
         </div>
         
+        ${debugSection}
+        
         <!-- Next Steps -->
         <div style="background: white; padding: 25px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
           <h3 style="color: #2c3e50; margin-top: 0;">📝 Next Steps</h3>
@@ -395,9 +399,8 @@ export async function sendLecturerActivationEmail(
     });
 
     console.log(`✅ Lecturer activation email sent to ${email}`);
-    console.log(`🔗 Activation link: ${activationLink}`);
-  } catch (error) {
-    console.error(`❌ Failed to send lecturer activation email to ${email}:`, error);
-    // Don't throw error to prevent breaking the flow
+  } catch (error: any) {
+    console.error(`❌ Failed to send lecturer activation email to ${email}:`, error.message);
+    throw error; // Throw error so caller knows email failed
   }
 }

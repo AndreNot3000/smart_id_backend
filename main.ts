@@ -9,6 +9,7 @@ import authRoutes from './src/routes/auth.routes.js';
 import superadminRoutes from './src/routes/superadmin.routes.js';
 import userRoutes from './src/routes/user.routes.js';
 import adminRoutes from './src/routes/admin.routes.js';
+import qrRoutes from './src/routes/qr.routes.js';
 
 // Database
 import { initDatabase } from './src/database/connection.js';
@@ -40,6 +41,7 @@ app.route('/api/auth', authRoutes);
 app.route('/api/superadmin', superadminRoutes);
 app.route('/api/users', userRoutes);
 app.route('/api/admin', adminRoutes);
+app.route('/api/qr', qrRoutes);
 
 // 404 handler
 app.notFound((c) => {

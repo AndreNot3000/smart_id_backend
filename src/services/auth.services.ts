@@ -1,12 +1,14 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { ObjectId } from 'mongodb';
 import { getOTPCollection } from '../database/connection.js';
 import { sendOTPEmail } from './email.services.js';
+import { APP_CONSTANTS } from '../config/constants.js';
 
 export class AuthService {
   static async hashPassword(password: string): Promise<string> {
-    return await bcrypt.hash(password, 12);
+    return await bcrypt.hash(password, APP_CONSTANTS.PASSWORD.BCRYPT_ROUNDS);
   }
 
   static async verifyPassword(password: string, hash: string): Promise<boolean> {
@@ -17,6 +19,14 @@ export class AuthService {
     const secret = process.env.JWT_SECRET!;
     const refreshSecret = process.env.JWT_REFRESH_SECRET!;
 
+    // Validate secrets exist and are strong enough
+    if (!secret || secret.length < 32) {
+      throw new Error('JWT_SECRET must be at least 32 characters long');
+    }
+    if (!refreshSecret || refreshSecret.length < 32) {
+      throw new Error('JWT_REFRESH_SECRET must be at least 32 characters long');
+    }
+
     const payload = {
       userId,
       userType,
@@ -24,15 +34,19 @@ export class AuthService {
       email,
     };
 
-    const accessToken = jwt.sign(payload, secret, { expiresIn: '24h' });
-    const refreshToken = jwt.sign({ userId }, refreshSecret, { expiresIn: '7d' });
+    const accessToken = jwt.sign(payload, secret, { 
+      expiresIn: APP_CONSTANTS.TOKEN.ACCESS_TOKEN_EXPIRY 
+    });
+    const refreshToken = jwt.sign({ userId }, refreshSecret, { 
+      expiresIn: APP_CONSTANTS.TOKEN.REFRESH_TOKEN_EXPIRY 
+    });
 
     return { accessToken, refreshToken };
   }
 
   static async generateOTP(email: string, purpose: string): Promise<string> {
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const expiresAt = new Date(Date.now() + APP_CONSTANTS.OTP.EXPIRY);
 
     const otpCollection = getOTPCollection();
     
@@ -100,13 +114,41 @@ export class AuthService {
     }
   }
 
-  // Generate random token for email verification links
-  static generateToken(length: number = 32): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let token = '';
-    for (let i = 0; i < length; i++) {
-      token += chars.charAt(Math.floor(Math.random() * chars.length));
+  /**
+   * Generate cryptographically secure random token for email verification links
+   * Uses crypto.randomBytes for better security than Math.random()
+   */
+  static generateToken(length: number = APP_CONSTANTS.TOKEN.VERIFICATION_TOKEN_LENGTH): string {
+    return crypto.randomBytes(length).toString('base64url').slice(0, length);
+  }
+
+  /**
+   * Validate password strength
+   */
+  static validatePasswordStrength(password: string): { valid: boolean; message?: string } {
+    if (password.length < APP_CONSTANTS.PASSWORD.MIN_LENGTH) {
+      return {
+        valid: false,
+        message: `Password must be at least ${APP_CONSTANTS.PASSWORD.MIN_LENGTH} characters long`,
+      };
     }
-    return token;
+
+    // Check for at least one number
+    if (!/\d/.test(password)) {
+      return {
+        valid: false,
+        message: 'Password must contain at least one number',
+      };
+    }
+
+    // Check for at least one letter
+    if (!/[a-zA-Z]/.test(password)) {
+      return {
+        valid: false,
+        message: 'Password must contain at least one letter',
+      };
+    }
+
+    return { valid: true };
   }
 }

@@ -570,3 +570,199 @@ POST /api/auth/resend-otp      # Resend OTP code
 ## ✅ Complete API Reference
 
 This covers all **27 endpoints** with request/response examples. Use this as your comprehensive API reference for development and testing! 🚀
+
+
+---
+
+## 📱 QR Code & Attendance System
+
+### Generate QR Code
+
+**Endpoint:** `GET /api/qr/generate`  
+**Authentication:** Required (Student or Lecturer only)  
+**Description:** Generate a unique QR code for identification
+
+**Response:**
+```json
+{
+  "message": "QR code generated successfully",
+  "qrData": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "expiresIn": "5 minutes",
+  "userInfo": {
+    "name": "John Doe",
+    "userType": "student",
+    "id": "HARV-123456789"
+  }
+}
+```
+
+---
+
+### Verify QR Code
+
+**Endpoint:** `POST /api/qr/verify`  
+**Authentication:** Required (Lecturer or Admin only)  
+**Description:** Verify a QR code and get user information
+
+**Request:**
+```json
+{
+  "qrData": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "purpose": "ID Verification",
+  "location": "Room 101",
+  "notes": "Optional notes"
+}
+```
+
+**Response:**
+```json
+{
+  "message": "QR code verified successfully",
+  "verified": true,
+  "userType": "student",
+  "userInfo": {
+    "studentId": "HARV-123456789",
+    "firstName": "John",
+    "lastName": "Doe",
+    "email": "john.doe@university.edu",
+    "department": "Computer Science",
+    "year": "3rd Year",
+    "avatar": "JD",
+    "institutionName": "Harvard University",
+    "status": "active",
+    "emailVerified": true
+  },
+  "scannedAt": "2026-02-19T10:30:00.000Z"
+}
+```
+
+---
+
+### Scan and Mark Attendance
+
+**Endpoint:** `POST /api/qr/scan-attendance`  
+**Authentication:** Required (Lecturer or Admin only)  
+**Description:** Scan QR code and automatically record attendance
+
+**Request:**
+```json
+{
+  "qrData": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "purpose": "Class Attendance",
+  "location": "Room 101",
+  "notes": "CS101 - Introduction to Programming"
+}
+```
+
+**Response:**
+```json
+{
+  "message": "Attendance marked successfully",
+  "attendanceId": "507f1f77bcf86cd799439013",
+  "student": {
+    "studentId": "HARV-123456789",
+    "name": "John Doe",
+    "department": "Computer Science",
+    "year": "3rd Year"
+  },
+  "scannedBy": {
+    "name": "Prof. Jane Smith",
+    "userType": "lecturer"
+  },
+  "purpose": "Class Attendance",
+  "location": "Room 101",
+  "scannedAt": "2026-02-19T10:30:00.000Z"
+}
+```
+
+---
+
+### Get Student Attendance History
+
+**Endpoint:** `GET /api/qr/attendance/student/:studentId`  
+**Authentication:** Required (Lecturer or Admin only)  
+**Description:** View attendance history for a specific student
+
+**Query Parameters:**
+- `page` (optional) - Page number (default: 1)
+- `limit` (optional) - Records per page (default: 20, max: 100)
+
+**Response:**
+```json
+{
+  "student": {
+    "studentId": "HARV-123456789",
+    "name": "John Doe",
+    "department": "Computer Science",
+    "year": "3rd Year"
+  },
+  "attendance": [
+    {
+      "id": "507f1f77bcf86cd799439013",
+      "purpose": "Class Attendance",
+      "location": "Room 101",
+      "notes": "CS101",
+      "scannedBy": {
+        "name": "Prof. Jane Smith",
+        "userType": "lecturer"
+      },
+      "scannedAt": "2026-02-19T10:30:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 45,
+    "totalPages": 3,
+    "hasMore": true
+  }
+}
+```
+
+---
+
+### Get My Attendance History
+
+**Endpoint:** `GET /api/qr/attendance/my-history`  
+**Authentication:** Required (Student only)  
+**Description:** View your own attendance history
+
+**Query Parameters:**
+- `page` (optional) - Page number (default: 1)
+- `limit` (optional) - Records per page (default: 20, max: 100)
+
+**Response:**
+```json
+{
+  "attendance": [
+    {
+      "id": "507f1f77bcf86cd799439013",
+      "purpose": "Class Attendance",
+      "location": "Room 101",
+      "notes": "CS101",
+      "scannedBy": {
+        "name": "Prof. Jane Smith",
+        "userType": "lecturer"
+      },
+      "scannedAt": "2026-02-19T10:30:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 45,
+    "totalPages": 3,
+    "hasMore": true
+  }
+}
+```
+
+---
+
+## 🔐 QR Code Security
+
+- QR codes contain JWT tokens signed with your JWT_SECRET
+- Tokens expire in 5 minutes for security
+- Cross-institution scanning is blocked
+- Only lecturers and admins can scan QR codes
+- Only students and lecturers can generate QR codes

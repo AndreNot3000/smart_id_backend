@@ -5,6 +5,8 @@ import { getUsersCollection, getOTPCollection } from '../database/connection.js'
 import { authMiddleware } from '../middleware/auth.middleware.js';
 import { AuthService } from '../services/auth.services.js';
 import { sendStudentActivationEmail, sendLecturerActivationEmail } from '../services/email.services.js';
+import { APP_CONSTANTS, getConfig } from '../config/constants.js';
+import { sanitizeEmail, sanitizeString } from '../utils/sanitize.js';
 
 const admin = new Hono();
 
@@ -46,6 +48,7 @@ function generateLecturerId(institutionCode: string): string {
 // Create student account (Admin only)
 admin.post('/students', authMiddleware, async (c) => {
   try {
+    const config = getConfig();
     const authUser = c.get('user');
     
     // Only admins can create students
@@ -56,11 +59,20 @@ admin.post('/students', authMiddleware, async (c) => {
     const body = await c.req.json();
     const data = createStudentSchema.parse(body);
 
+    // Sanitize inputs
+    const sanitizedData = {
+      firstName: sanitizeString(data.firstName),
+      lastName: sanitizeString(data.lastName),
+      email: sanitizeEmail(data.email),
+      department: sanitizeString(data.department),
+      year: sanitizeString(data.year),
+    };
+
     const usersCollection = getUsersCollection();
     const otpCollection = getOTPCollection();
 
     // Check if email already exists
-    const existingUser = await usersCollection.findOne({ email: data.email });
+    const existingUser = await usersCollection.findOne({ email: sanitizedData.email });
     if (existingUser) {
       return c.json({ error: 'Email already registered' }, 400);
     }
@@ -83,30 +95,30 @@ admin.post('/students', authMiddleware, async (c) => {
     const studentId = generateStudentId(institution.code);
     
     // Generate default password: firstName123 (lowercase)
-    const defaultPassword = `${data.firstName.toLowerCase()}123`;
+    const defaultPassword = `${sanitizedData.firstName.toLowerCase()}123`;
     const passwordHash = await AuthService.hashPassword(defaultPassword);
 
-    // Generate verification token (secure random string)
-    const verificationToken = AuthService.generateToken(32); // 32 character random token
-    const tokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    // Generate verification token (cryptographically secure)
+    const verificationToken = AuthService.generateToken();
+    const tokenExpiresAt = new Date(Date.now() + APP_CONSTANTS.TOKEN.VERIFICATION_TOKEN_EXPIRY);
 
     // Create student user
     const newStudent = {
-      email: data.email,
+      email: sanitizedData.email,
       passwordHash,
       passwordHistory: [],
       userType: 'student' as const,
       institutionId: adminUser.institutionId,
       status: 'pending' as const,
       emailVerified: false,
-      isFirstLogin: true, // Flag for password change requirement
+      isFirstLogin: true,
       profile: {
-        firstName: data.firstName,
-        lastName: data.lastName,
+        firstName: sanitizedData.firstName,
+        lastName: sanitizedData.lastName,
         studentId,
-        department: data.department,
-        year: data.year,
-        avatar: `${data.firstName.charAt(0)}${data.lastName.charAt(0)}`.toUpperCase(),
+        department: sanitizedData.department,
+        year: sanitizedData.year,
+        avatar: `${sanitizedData.firstName.charAt(0)}${sanitizedData.lastName.charAt(0)}`.toUpperCase(),
       },
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -116,7 +128,7 @@ admin.post('/students', authMiddleware, async (c) => {
 
     // Store verification token
     await otpCollection.insertOne({
-      email: data.email,
+      email: sanitizedData.email,
       code: verificationToken,
       purpose: 'email_verification',
       expiresAt: tokenExpiresAt,
@@ -124,41 +136,53 @@ admin.post('/students', authMiddleware, async (c) => {
       createdAt: new Date(),
     });
 
-    // Send activation email
-    console.log('📧 About to send activation email...');
+    // Send activation email (throw error if fails)
     try {
       await sendStudentActivationEmail(
-        data.email,
-        data.firstName,
-        data.lastName,
+        sanitizedData.email,
+        sanitizedData.firstName,
+        sanitizedData.lastName,
         studentId,
         defaultPassword,
         verificationToken,
         institution.name
       );
-      console.log('✅ Activation email sent successfully');
-    } catch (emailError) {
-      console.error('❌ Failed to send activation email:', emailError);
-      // Don't fail the student creation if email fails
+    } catch (emailError: any) {
+      console.error('❌ Failed to send activation email:', emailError.message);
+      // Rollback: Delete the created user and token
+      await usersCollection.deleteOne({ _id: result.insertedId });
+      await otpCollection.deleteOne({ email: sanitizedData.email, code: verificationToken });
+      
+      return c.json({ 
+        error: 'Failed to send activation email. Please try again or contact support.',
+        details: config.isDevelopment ? emailError.message : undefined
+      }, 500);
     }
 
-    return c.json({
+    // Prepare response
+    const response: any = {
       message: 'Student account created successfully. Activation email sent.',
       student: {
         id: result.insertedId,
-        email: data.email,
+        email: sanitizedData.email,
         studentId,
-        firstName: data.firstName,
-        lastName: data.lastName,
-        department: data.department,
-        year: data.year,
+        firstName: sanitizedData.firstName,
+        lastName: sanitizedData.lastName,
+        department: sanitizedData.department,
+        year: sanitizedData.year,
         status: 'pending',
-        defaultPassword, // Return for admin reference (remove in production)
       },
-    }, 201);
+    };
 
-  } catch (error) {
-    console.error('Create student error:', error);
+    // Only include default password in development
+    if (config.security.returnPasswordInResponse) {
+      response.student.defaultPassword = defaultPassword;
+    }
+
+    return c.json(response, 201);
+
+  } catch (error: any) {
+    console.error('Create student error:', error.message);
     if (error instanceof z.ZodError) {
       return c.json({
         error: 'Validation error',
@@ -175,6 +199,7 @@ admin.post('/students', authMiddleware, async (c) => {
 // Create lecturer account (Admin only)
 admin.post('/lecturers', authMiddleware, async (c) => {
   try {
+    const config = getConfig();
     const authUser = c.get('user');
     
     // Only admins can create lecturers
@@ -185,11 +210,21 @@ admin.post('/lecturers', authMiddleware, async (c) => {
     const body = await c.req.json();
     const data = createLecturerSchema.parse(body);
 
+    // Sanitize inputs
+    const sanitizedData = {
+      firstName: sanitizeString(data.firstName),
+      lastName: sanitizeString(data.lastName),
+      email: sanitizeEmail(data.email),
+      department: sanitizeString(data.department),
+      role: data.role,
+      specialization: data.specialization ? sanitizeString(data.specialization) : '',
+    };
+
     const usersCollection = getUsersCollection();
     const otpCollection = getOTPCollection();
 
     // Check if email already exists
-    const existingUser = await usersCollection.findOne({ email: data.email });
+    const existingUser = await usersCollection.findOne({ email: sanitizedData.email });
     if (existingUser) {
       return c.json({ error: 'Email already registered' }, 400);
     }
@@ -212,31 +247,31 @@ admin.post('/lecturers', authMiddleware, async (c) => {
     const lecturerId = generateLecturerId(institution.code);
     
     // Generate default password: firstName123 (lowercase)
-    const defaultPassword = `${data.firstName.toLowerCase()}123`;
+    const defaultPassword = `${sanitizedData.firstName.toLowerCase()}123`;
     const passwordHash = await AuthService.hashPassword(defaultPassword);
 
-    // Generate verification token (secure random string)
-    const verificationToken = AuthService.generateToken(32); // 32 character random token
-    const tokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    // Generate verification token (cryptographically secure)
+    const verificationToken = AuthService.generateToken();
+    const tokenExpiresAt = new Date(Date.now() + APP_CONSTANTS.TOKEN.VERIFICATION_TOKEN_EXPIRY);
 
     // Create lecturer user
     const newLecturer = {
-      email: data.email,
+      email: sanitizedData.email,
       passwordHash,
       passwordHistory: [],
       userType: 'lecturer' as const,
       institutionId: adminUser.institutionId,
       status: 'pending' as const,
       emailVerified: false,
-      isFirstLogin: true, // Flag for password change requirement
+      isFirstLogin: true,
       profile: {
-        firstName: data.firstName,
-        lastName: data.lastName,
+        firstName: sanitizedData.firstName,
+        lastName: sanitizedData.lastName,
         lecturerId,
-        department: data.department,
-        role: data.role,
-        specialization: data.specialization || '',
-        avatar: `${data.firstName.charAt(0)}${data.lastName.charAt(0)}`.toUpperCase(),
+        department: sanitizedData.department,
+        role: sanitizedData.role,
+        specialization: sanitizedData.specialization,
+        avatar: `${sanitizedData.firstName.charAt(0)}${sanitizedData.lastName.charAt(0)}`.toUpperCase(),
       },
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -246,7 +281,7 @@ admin.post('/lecturers', authMiddleware, async (c) => {
 
     // Store verification token
     await otpCollection.insertOne({
-      email: data.email,
+      email: sanitizedData.email,
       code: verificationToken,
       purpose: 'email_verification',
       expiresAt: tokenExpiresAt,
@@ -254,44 +289,56 @@ admin.post('/lecturers', authMiddleware, async (c) => {
       createdAt: new Date(),
     });
 
-    // Send activation email
-    console.log('📧 About to send lecturer activation email...');
+    // Send activation email (throw error if fails)
     try {
       await sendLecturerActivationEmail(
-        data.email,
-        data.firstName,
-        data.lastName,
+        sanitizedData.email,
+        sanitizedData.firstName,
+        sanitizedData.lastName,
         lecturerId,
         defaultPassword,
         verificationToken,
         institution.name,
-        data.role,
-        data.department
+        sanitizedData.role,
+        sanitizedData.department
       );
-      console.log('✅ Lecturer activation email sent successfully');
-    } catch (emailError) {
-      console.error('❌ Failed to send lecturer activation email:', emailError);
-      // Don't fail the lecturer creation if email fails
+    } catch (emailError: any) {
+      console.error('❌ Failed to send lecturer activation email:', emailError.message);
+      // Rollback: Delete the created user and token
+      await usersCollection.deleteOne({ _id: result.insertedId });
+      await otpCollection.deleteOne({ email: sanitizedData.email, code: verificationToken });
+      
+      return c.json({ 
+        error: 'Failed to send activation email. Please try again or contact support.',
+        details: config.isDevelopment ? emailError.message : undefined
+      }, 500);
     }
 
-    return c.json({
+    // Prepare response
+    const response: any = {
       message: 'Lecturer account created successfully. Activation email sent.',
       lecturer: {
         id: result.insertedId,
-        email: data.email,
+        email: sanitizedData.email,
         lecturerId,
-        firstName: data.firstName,
-        lastName: data.lastName,
-        department: data.department,
-        role: data.role,
-        specialization: data.specialization,
+        firstName: sanitizedData.firstName,
+        lastName: sanitizedData.lastName,
+        department: sanitizedData.department,
+        role: sanitizedData.role,
+        specialization: sanitizedData.specialization,
         status: 'pending',
-        defaultPassword, // Return for admin reference (remove in production)
       },
-    }, 201);
+    };
 
-  } catch (error) {
-    console.error('Create lecturer error:', error);
+    // Only include default password in development
+    if (config.security.returnPasswordInResponse) {
+      response.lecturer.defaultPassword = defaultPassword;
+    }
+
+    return c.json(response, 201);
+
+  } catch (error: any) {
+    console.error('Create lecturer error:', error.message);
     if (error instanceof z.ZodError) {
       return c.json({
         error: 'Validation error',
@@ -305,7 +352,7 @@ admin.post('/lecturers', authMiddleware, async (c) => {
   }
 });
 
-// Get all students for admin's institution
+// Get all students for admin's institution (with pagination)
 admin.get('/students', authMiddleware, async (c) => {
   try {
     const authUser = c.get('user');
@@ -315,15 +362,29 @@ admin.get('/students', authMiddleware, async (c) => {
       return c.json({ error: 'Access denied. Admin privileges required.' }, 403);
     }
 
+    // Pagination parameters
+    const page = parseInt(c.req.query('page') || '1');
+    const limit = Math.min(
+      parseInt(c.req.query('limit') || String(APP_CONSTANTS.PAGINATION.DEFAULT_PAGE_SIZE)),
+      APP_CONSTANTS.PAGINATION.MAX_PAGE_SIZE
+    );
+    const skip = (page - 1) * limit;
+
     const usersCollection = getUsersCollection();
     const institutionId = new ObjectId(authUser.institutionId);
 
-    const students = await usersCollection
-      .find(
-        { institutionId, userType: 'student' },
-        { projection: { passwordHash: 0, passwordHistory: 0 } }
-      )
-      .toArray();
+    const [students, total] = await Promise.all([
+      usersCollection
+        .find(
+          { institutionId, userType: 'student' },
+          { projection: { passwordHash: 0, passwordHistory: 0 } }
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray(),
+      usersCollection.countDocuments({ institutionId, userType: 'student' })
+    ]);
 
     return c.json({
       students: students.map(student => ({
@@ -338,16 +399,22 @@ admin.get('/students', authMiddleware, async (c) => {
         emailVerified: student.emailVerified,
         createdAt: student.createdAt,
       })),
-      total: students.length,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasMore: skip + students.length < total,
+      },
     });
 
-  } catch (error) {
-    console.error('Get students error:', error);
+  } catch (error: any) {
+    console.error('Get students error:', error.message);
     return c.json({ error: 'Failed to fetch students' }, 500);
   }
 });
 
-// Get all lecturers for admin's institution
+// Get all lecturers for admin's institution (with pagination)
 admin.get('/lecturers', authMiddleware, async (c) => {
   try {
     const authUser = c.get('user');
@@ -357,15 +424,29 @@ admin.get('/lecturers', authMiddleware, async (c) => {
       return c.json({ error: 'Access denied. Admin privileges required.' }, 403);
     }
 
+    // Pagination parameters
+    const page = parseInt(c.req.query('page') || '1');
+    const limit = Math.min(
+      parseInt(c.req.query('limit') || String(APP_CONSTANTS.PAGINATION.DEFAULT_PAGE_SIZE)),
+      APP_CONSTANTS.PAGINATION.MAX_PAGE_SIZE
+    );
+    const skip = (page - 1) * limit;
+
     const usersCollection = getUsersCollection();
     const institutionId = new ObjectId(authUser.institutionId);
 
-    const lecturers = await usersCollection
-      .find(
-        { institutionId, userType: 'lecturer' },
-        { projection: { passwordHash: 0, passwordHistory: 0 } }
-      )
-      .toArray();
+    const [lecturers, total] = await Promise.all([
+      usersCollection
+        .find(
+          { institutionId, userType: 'lecturer' },
+          { projection: { passwordHash: 0, passwordHistory: 0 } }
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray(),
+      usersCollection.countDocuments({ institutionId, userType: 'lecturer' })
+    ]);
 
     return c.json({
       lecturers: lecturers.map(lecturer => ({
@@ -381,11 +462,17 @@ admin.get('/lecturers', authMiddleware, async (c) => {
         emailVerified: lecturer.emailVerified,
         createdAt: lecturer.createdAt,
       })),
-      total: lecturers.length,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasMore: skip + lecturers.length < total,
+      },
     });
 
-  } catch (error) {
-    console.error('Get lecturers error:', error);
+  } catch (error: any) {
+    console.error('Get lecturers error:', error.message);
     return c.json({ error: 'Failed to fetch lecturers' }, 500);
   }
 });

@@ -70,6 +70,36 @@ auth.get('/institutions', async (c) => {
   }
 });
 
+// Debug endpoint to check OTP records (remove in production)
+auth.get('/debug/otp/:email', async (c) => {
+  try {
+    const email = c.req.param('email');
+    const otpCollection = getOTPCollection();
+    
+    const records = await otpCollection
+      .find({ email: decodeURIComponent(email) })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .toArray();
+
+    return c.json({
+      email: decodeURIComponent(email),
+      records: records.map(record => ({
+        id: record._id,
+        code: record.code,
+        purpose: record.purpose,
+        used: record.used,
+        expiresAt: record.expiresAt,
+        isExpired: record.expiresAt <= new Date(),
+        createdAt: record.createdAt
+      }))
+    });
+  } catch (error) {
+    console.error('Debug OTP error:', error);
+    return c.json({ error: 'Failed to fetch OTP records' }, 500);
+  }
+});
+
 // Admin Registration endpoint (Admin account creation for existing institution)
 auth.post('/admin/register', async (c) => {
   try {
@@ -293,38 +323,77 @@ auth.post('/login', async (c) => {
   }
 });
 
-// Verify email with magic link token (for students)
+// Verify email with magic link token (for students and lecturers)
 auth.get('/verify-email', async (c) => {
   try {
+    console.log('🔍 Email verification attempt started');
     const token = c.req.query('token');
     const email = c.req.query('email');
 
+    console.log('📝 Verification parameters:', { 
+      token: token ? `${token.substring(0, 10)}...` : 'missing',
+      email: email || 'missing'
+    });
+
     if (!token || !email) {
+      console.log('❌ Missing token or email');
       return c.json({ error: 'Missing token or email' }, 400);
     }
 
     const usersCollection = getUsersCollection();
     const otpCollection = getOTPCollection();
 
-    // Find the verification token
+    console.log('🔍 Searching for verification record...');
+    
+    // Find the verification token in otp_codes collection
     const verificationRecord = await otpCollection.findOne({
-      email,
+      email: decodeURIComponent(email),
       code: token,
       purpose: 'email_verification',
       used: false,
       expiresAt: { $gt: new Date() }
     });
 
+    console.log('📋 Verification record found:', verificationRecord ? 'Yes' : 'No');
+    
+    if (verificationRecord) {
+      console.log('📊 Record details:', {
+        email: verificationRecord.email,
+        purpose: verificationRecord.purpose,
+        used: verificationRecord.used,
+        expiresAt: verificationRecord.expiresAt,
+        isExpired: verificationRecord.expiresAt <= new Date()
+      });
+    }
+
     if (!verificationRecord) {
+      console.log('❌ Invalid or expired verification record');
+      
+      // Check if there's any record for this email (for debugging)
+      const anyRecord = await otpCollection.findOne({ email: decodeURIComponent(email) });
+      console.log('🔍 Any record for email exists:', anyRecord ? 'Yes' : 'No');
+      
+      if (anyRecord) {
+        console.log('📊 Found record details:', {
+          code: anyRecord.code,
+          purpose: anyRecord.purpose,
+          used: anyRecord.used,
+          expiresAt: anyRecord.expiresAt,
+          isExpired: anyRecord.expiresAt <= new Date()
+        });
+      }
+      
       return c.json({ 
         error: 'Invalid or expired verification link',
         message: 'This link may have expired or already been used. Please contact your administrator.'
       }, 400);
     }
 
+    console.log('✅ Valid verification record found, updating user...');
+
     // Mark email as verified and activate user
-    await usersCollection.updateOne(
-      { email },
+    const updateResult = await usersCollection.updateOne(
+      { email: decodeURIComponent(email) },
       { 
         $set: { 
           emailVerified: true, 
@@ -334,11 +403,19 @@ auth.get('/verify-email', async (c) => {
       }
     );
 
+    console.log('📊 User update result:', {
+      matchedCount: updateResult.matchedCount,
+      modifiedCount: updateResult.modifiedCount
+    });
+
     // Mark token as used
     await otpCollection.updateOne(
       { _id: verificationRecord._id },
       { $set: { used: true } }
     );
+
+    console.log('✅ Token marked as used');
+    console.log('🎉 Email verification completed successfully');
 
     // Return HTML redirect to login page
     return c.html(`
@@ -401,8 +478,12 @@ auth.get('/verify-email', async (c) => {
     `);
 
   } catch (error) {
-    console.error('Email verification error:', error);
-    return c.json({ error: 'Verification failed' }, 500);
+    console.error('❌ Email verification error:', error);
+    console.error('🔍 Error stack:', error.stack);
+    return c.json({ 
+      error: 'Verification failed',
+      message: 'An unexpected error occurred during verification. Please try again or contact support.'
+    }, 500);
   }
 });
 

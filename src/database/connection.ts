@@ -2,6 +2,7 @@ import { MongoClient, Db, Collection } from 'mongodb';
 import type { Document } from 'mongodb';
 import type { Institution } from '../models/institution.model.js';
 import type { User, OTPCode } from '../models/user.model.js';
+import type { Attendance } from '../models/attendance.model.js';
 
 let client: MongoClient;
 let db: Db;
@@ -66,11 +67,13 @@ export function getCollection<T extends Document = Document>(name: string): Coll
 export const getInstitutionsCollection = () => getCollection<Institution>('institutions');
 export const getUsersCollection = () => getCollection<User>('users');
 export const getOTPCollection = () => getCollection<OTPCode>('otp_codes');
+export const getAttendanceCollection = () => getCollection<Attendance>('attendance');
 
 async function createIndexes() {
   const institutionsCol = getInstitutionsCollection();
   const usersCol = getUsersCollection();
   const otpCol = getOTPCollection();
+  const attendanceCol = getAttendanceCollection();
   
   // Institution indexes
   await institutionsCol.createIndex({ code: 1 }, { unique: true });
@@ -82,9 +85,26 @@ async function createIndexes() {
   await usersCol.createIndex({ userType: 1 });
   await usersCol.createIndex({ email: 1, userType: 1 });
   
+  // Add unique indexes for student and lecturer IDs
+  await usersCol.createIndex(
+    { 'profile.studentId': 1 }, 
+    { unique: true, sparse: true } // sparse: true allows null values
+  );
+  await usersCol.createIndex(
+    { 'profile.lecturerId': 1 }, 
+    { unique: true, sparse: true }
+  );
+  
   // OTP indexes
   await otpCol.createIndex({ email: 1, purpose: 1 });
-  await otpCol.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+  await otpCol.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL index for auto-cleanup
+  await otpCol.createIndex({ email: 1, code: 1, purpose: 1 }); // Compound index for faster lookups
+  
+  // Attendance indexes
+  await attendanceCol.createIndex({ studentId: 1 });
+  await attendanceCol.createIndex({ scannedBy: 1 });
+  await attendanceCol.createIndex({ scannedAt: -1 }); // Sort by date descending
+  await attendanceCol.createIndex({ studentId: 1, scannedAt: -1 }); // Compound for student history
   
   console.log('✅ Database indexes created');
 }
