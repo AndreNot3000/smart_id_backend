@@ -20,11 +20,31 @@ const app = new Hono();
 app.use('*', logger());
 app.use('*', prettyJSON());
 
-// CORS Configuration - supports multiple origins
+// CORS Configuration - supports multiple origins including Ngrok
 const allowedOrigins = process.env.CORS_ORIGIN?.split(',').map(origin => origin.trim()) || ['http://localhost:3000'];
 
 app.use('*', cors({
-  origin: allowedOrigins,
+  origin: (origin) => {
+    // Allow requests with no origin (like mobile apps or Postman)
+    if (!origin) return '*';
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) return origin;
+    
+    // Allow all Ngrok domains (*.ngrok-free.dev, *.ngrok.io, *.ngrok-free.app)
+    if (origin.includes('.ngrok-free.dev') || 
+        origin.includes('.ngrok.io') || 
+        origin.includes('.ngrok-free.app')) {
+      return origin;
+    }
+    
+    // Allow Vercel preview deployments
+    if (origin.includes('.vercel.app')) {
+      return origin;
+    }
+    
+    return allowedOrigins[0]; // fallback to first allowed origin
+  },
   allowHeaders: ['Content-Type', 'Authorization', 'X-Super-Admin-Key'],
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   credentials: true,
