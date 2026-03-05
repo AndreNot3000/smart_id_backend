@@ -88,7 +88,15 @@ async function startServer() {
     console.log('✅ Database connected successfully');
     
     const port = parseInt(process.env.PORT || '8000');
-    console.log(`🚀 Server running on http://localhost:${port}`);
+    
+    // Start the Bun server
+    Bun.serve({
+      port: port,
+      hostname: '0.0.0.0', // Listen on all interfaces (required for VPS)
+      fetch: app.fetch,
+    });
+    
+    console.log(`🚀 Server running on http://0.0.0.0:${port}`);
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);
@@ -96,9 +104,3 @@ async function startServer() {
 }
 
 startServer();
-
-// For Bun
-export default {
-  port: parseInt(process.env.PORT || '8000'),
-  fetch: app.fetch,
-};
