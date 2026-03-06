@@ -209,7 +209,8 @@ user.put('/avatar', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Update avatar error:', error);
-    return c.json({ error: 'Failed to update avatar', details: error.message }, 500);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: 'Failed to update avatar', details: errorMessage }, 500);
   }
 });
 
