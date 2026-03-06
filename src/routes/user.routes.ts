@@ -168,8 +168,23 @@ user.put('/avatar', authMiddleware, async (c) => {
     const { avatar } = body;
 
     if (!avatar) {
-      return c.json({ message: 'Avatar data is required' }, 400);
+      return c.json({ error: 'Avatar data is required' }, 400);
     }
+
+    // Validate base64 format
+    if (!avatar.startsWith('data:image/')) {
+      return c.json({ error: 'Invalid image format. Must be a base64 data URI' }, 400);
+    }
+
+    // Check size (base64 string length, roughly 5MB limit)
+    const sizeInBytes = (avatar.length * 3) / 4;
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    
+    if (sizeInBytes > maxSize) {
+      return c.json({ error: 'Image too large. Maximum size is 5MB' }, 400);
+    }
+
+    console.log(`📸 Uploading avatar for user ${authUser.email}, size: ${(sizeInBytes / 1024).toFixed(2)}KB`);
 
     const result = await usersCollection.findOneAndUpdate(
       { _id: userId },
@@ -183,8 +198,10 @@ user.put('/avatar', authMiddleware, async (c) => {
     );
 
     if (!result) {
-      return c.json({ message: 'User not found' }, 404);
+      return c.json({ error: 'User not found' }, 404);
     }
+
+    console.log(`✅ Avatar uploaded successfully for user ${authUser.email}`);
 
     return c.json({
       message: 'Avatar updated successfully',
@@ -192,7 +209,7 @@ user.put('/avatar', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Update avatar error:', error);
-    return c.json({ message: 'Failed to update avatar' }, 500);
+    return c.json({ error: 'Failed to update avatar', details: error.message }, 500);
   }
 });
 
