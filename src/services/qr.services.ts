@@ -16,7 +16,7 @@ export interface StudentQRInfo {
   email: string;
   department: string;
   year: string;
-  avatar: string;
+  avatar: string | null;
   institutionName: string;
   status: string;
   emailVerified: boolean;
@@ -30,7 +30,7 @@ export interface LecturerQRInfo {
   department: string;
   role: string;
   specialization: string;
-  avatar: string;
+  avatar: string | null;
   institutionName: string;
   status: string;
   emailVerified: boolean;
@@ -106,7 +106,7 @@ export class QRService {
       email: student.email,
       department: student.profile.department || '',
       year: student.profile.year || '',
-      avatar: student.profile.avatar || '',
+      avatar: student.profile.avatar || null,
       institutionName: institution?.name || 'Unknown Institution',
       status: student.status,
       emailVerified: student.emailVerified,
@@ -149,7 +149,7 @@ export class QRService {
       department: lecturer.profile.department || '',
       role: lecturer.profile.role || '',
       specialization: lecturer.profile.specialization || '',
-      avatar: lecturer.profile.avatar || '',
+      avatar: lecturer.profile.avatar || null,
       institutionName: institution?.name || 'Unknown Institution',
       status: lecturer.status,
       emailVerified: lecturer.emailVerified,
