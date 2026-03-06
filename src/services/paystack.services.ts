@@ -1,7 +1,5 @@
-import Paystack from 'paystack-node';
-
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY!;
-const paystack = new Paystack(PAYSTACK_SECRET_KEY);
+const PAYSTACK_BASE_URL = 'https://api.paystack.co';
 
 export interface InitializePaymentParams {
   email: string;
@@ -30,27 +28,36 @@ export class PaystackService {
    */
   static async initializePayment(params: InitializePaymentParams) {
     try {
-      const response = await paystack.transaction.initialize({
-        email: params.email,
-        amount: Math.round(params.amount * 100), // Convert to kobo (smallest unit)
-        reference: params.reference,
-        callback_url: params.callbackUrl || `${process.env.FRONTEND_URL}/payment/callback`,
-        metadata: params.metadata,
-        channels: ['card', 'bank', 'ussd', 'mobile_money', 'bank_transfer'],
+      const response = await fetch(`${PAYSTACK_BASE_URL}/transaction/initialize`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${PAYSTACK_SECRET_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: params.email,
+          amount: Math.round(params.amount * 100), // Convert to kobo
+          reference: params.reference,
+          callback_url: params.callbackUrl || `${process.env.FRONTEND_URL}/payment/callback`,
+          metadata: params.metadata,
+          channels: ['card', 'bank', 'ussd', 'mobile_money', 'bank_transfer'],
+        }),
       });
 
-      if (response.status) {
+      const data: any = await response.json();
+
+      if (data.status && data.data) {
         return {
           success: true,
-          authorizationUrl: response.data.authorization_url,
-          accessCode: response.data.access_code,
-          reference: response.data.reference,
+          authorizationUrl: data.data.authorization_url,
+          accessCode: data.data.access_code,
+          reference: data.data.reference,
         };
       }
 
       return {
         success: false,
-        message: response.message || 'Failed to initialize payment',
+        message: data.message || 'Failed to initialize payment',
       };
     } catch (error: any) {
       console.error('Paystack initialization error:', error);
@@ -68,20 +75,28 @@ export class PaystackService {
    */
   static async verifyPayment(reference: string): Promise<VerifyPaymentResponse> {
     try {
-      const response = await paystack.transaction.verify(reference);
+      const response = await fetch(`${PAYSTACK_BASE_URL}/transaction/verify/${reference}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${PAYSTACK_SECRET_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      });
 
-      if (response.status && response.data) {
-        const data = response.data;
+      const data: any = await response.json();
+
+      if (data.status && data.data) {
+        const txData = data.data;
         
         return {
-          success: data.status === 'success',
-          reference: data.reference,
-          amount: data.amount / 100, // Convert from kobo to Naira
-          status: data.status,
-          paidAt: data.paid_at ? new Date(data.paid_at) : undefined,
-          channel: data.channel,
-          currency: data.currency,
-          metadata: data.metadata,
+          success: txData.status === 'success',
+          reference: txData.reference,
+          amount: txData.amount / 100, // Convert from kobo to Naira
+          status: txData.status,
+          paidAt: txData.paid_at ? new Date(txData.paid_at) : undefined,
+          channel: txData.channel,
+          currency: txData.currency,
+          metadata: txData.metadata,
         };
       }
 
