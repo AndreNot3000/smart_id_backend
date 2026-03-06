@@ -70,7 +70,7 @@ qr.get('/generate', authMiddleware, async (c) => {
         id: authUser.userType === 'student' 
           ? user.profile.studentId 
           : user.profile.lecturerId,
-        avatar: user.profile.avatar, // Initials like "JD"
+        avatar: user.profile.avatar || null, // Full base64 string or null if not set
         department: user.profile.department || '',
         year: user.profile.year || '',
         role: user.profile.role || '',
