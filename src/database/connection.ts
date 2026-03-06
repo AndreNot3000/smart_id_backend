@@ -3,6 +3,7 @@ import type { Document } from 'mongodb';
 import type { Institution } from '../models/institution.model.js';
 import type { User, OTPCode } from '../models/user.model.js';
 import type { Attendance } from '../models/attendance.model.js';
+import type { Wallet, Payment, ServicePayment } from '../models/payment.model.js';
 
 let client: MongoClient;
 let db: Db;
@@ -106,6 +107,25 @@ async function createIndexes() {
   await attendanceCol.createIndex({ scannedAt: -1 }); // Sort by date descending
   await attendanceCol.createIndex({ studentId: 1, scannedAt: -1 }); // Compound for student history
   
+  // Payment indexes
+  const walletsCol = db.collection('wallets');
+  const paymentsCol = db.collection('payments');
+  const servicePaymentsCol = db.collection('service_payments');
+  
+  await walletsCol.createIndex({ userId: 1 }, { unique: true });
+  await walletsCol.createIndex({ institutionId: 1 });
+  
+  await paymentsCol.createIndex({ userId: 1 });
+  await paymentsCol.createIndex({ reference: 1 }, { unique: true });
+  await paymentsCol.createIndex({ status: 1 });
+  await paymentsCol.createIndex({ createdAt: -1 });
+  await paymentsCol.createIndex({ userId: 1, createdAt: -1 });
+  
+  await servicePaymentsCol.createIndex({ userId: 1 });
+  await servicePaymentsCol.createIndex({ reference: 1 });
+  await servicePaymentsCol.createIndex({ status: 1 });
+  await servicePaymentsCol.createIndex({ createdAt: -1 });
+  
   console.log('✅ Database indexes created');
 }
 
@@ -113,4 +133,17 @@ export async function closeDatabase() {
   if (client) {
     await client.close();
   }
+}
+
+// Payment collections
+export function getWalletsCollection(): Collection<Wallet> {
+  return db.collection<Wallet>('wallets');
+}
+
+export function getPaymentsCollection(): Collection<Payment> {
+  return db.collection<Payment>('payments');
+}
+
+export function getServicePaymentsCollection(): Collection<ServicePayment> {
+  return db.collection<ServicePayment>('service_payments');
 }
