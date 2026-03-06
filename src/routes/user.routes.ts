@@ -17,6 +17,67 @@ const changePasswordSchema = z.object({
   path: ["confirmPassword"],
 });
 
+// Check profile completion status
+user.get('/profile/completion', authMiddleware, async (c) => {
+  try {
+    const usersCollection = getUsersCollection();
+    const authUser = c.get('user');
+    const userId = new ObjectId(authUser.userId);
+
+    const userDoc = await usersCollection.findOne({ _id: userId });
+
+    if (!userDoc) {
+      return c.json({ message: 'User not found' }, 404);
+    }
+
+    const profile = userDoc.profile;
+    const missingFields: string[] = [];
+    
+    // Required fields for all users
+    if (!profile.firstName) missingFields.push('firstName');
+    if (!profile.lastName) missingFields.push('lastName');
+    if (!profile.phone) missingFields.push('phone');
+    if (!profile.dateOfBirth) missingFields.push('dateOfBirth');
+    if (!profile.address) missingFields.push('address');
+    
+    // Required fields for students
+    if (userDoc.userType === 'student') {
+      if (!profile.department) missingFields.push('department');
+      if (!profile.year) missingFields.push('year');
+    }
+    
+    // Required fields for lecturers
+    if (userDoc.userType === 'lecturer') {
+      if (!profile.department) missingFields.push('department');
+      if (!profile.specialization) missingFields.push('specialization');
+    }
+
+    const isComplete = missingFields.length === 0;
+    const completionPercentage = Math.round(
+      ((profile.firstName ? 1 : 0) +
+       (profile.lastName ? 1 : 0) +
+       (profile.phone ? 1 : 0) +
+       (profile.dateOfBirth ? 1 : 0) +
+       (profile.address ? 1 : 0) +
+       (profile.department ? 1 : 0) +
+       (profile.year || profile.specialization ? 1 : 0) +
+       (profile.avatar ? 1 : 0)) / 8 * 100
+    );
+
+    return c.json({
+      isComplete,
+      completionPercentage,
+      missingFields,
+      message: isComplete 
+        ? 'Your profile is complete!' 
+        : 'Please complete your profile to access all features.'
+    });
+  } catch (error) {
+    console.error('Profile completion check error:', error);
+    return c.json({ message: 'Failed to check profile completion' }, 500);
+  }
+});
+
 // Get current user profile (for dashboard)
 user.get('/profile', authMiddleware, async (c) => {
   try {
