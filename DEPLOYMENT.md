@@ -1,92 +1,95 @@
-# 🚀 Deployment Guide - Render
+# Deployment Guide
 
-## Quick Fix for Current Issue
+## Production Setup (VPS)
 
-The deployment was failing because the start script was pointing to the wrong file. This has been fixed:
+### Server Details
+- **IP**: 64.111.93.87
+- **Domain**: smartunivid.xyz
+- **API Domain**: api.smartunivid.xyz
+- **Backend Port**: 8000
 
-**Before:** `"start": "bun src/index.ts"` ❌
-**After:** `"start": "bun main.ts"` ✅
+### Deployment Steps
 
-## Environment Variables to Set in Render
-
-Go to your Render service dashboard and add these environment variables:
-
-### Required Variables:
-```
-NODE_ENV=production
-PORT=10000
-DB_NAME=campus_id_saas
-MONGODB_URL=mongodb+srv://andreolumide_db_user:mf0YB4OPjKGLA64g@cluster0.p9ufwqc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
-JWT_SECRET=your-super-secret-jwt-key-here-change-this-in-production
-JWT_REFRESH_SECRET=your-refresh-secret-here-change-this-in-production
-SUPER_ADMIN_KEY=andrenaline
-```
-
-### Email Configuration (Mailtrap):
-```
-SMTP_HOST=sandbox.smtp.mailtrap.io
-SMTP_PORT=2525
-SMTP_USER=01c43d3a511a14
-SMTP_PASS=a83dcd09a51952
-```
-
-### URLs (Update with your actual domain):
-```
-CORS_ORIGIN=https://your-frontend-domain.com
-FRONTEND_URL=https://your-frontend-domain.com
-BACKEND_URL=https://your-backend-domain.onrender.com
-```
-
-## Deployment Steps:
-
-1. **Push the fixed code** (already done ✅)
-2. **Redeploy on Render** - Go to your service and click "Manual Deploy"
-3. **Add environment variables** in Render dashboard
-4. **Test the deployment** with a simple API call
-
-## Test Your Deployment:
-
-### ⚠️ **Important: Render Free Tier Behavior**
-- Free instances "sleep" after 15 minutes of inactivity
-- First request after sleep takes 50+ seconds to wake up
-- You may get 502 errors during wake-up - this is normal!
-
-### Testing Steps:
-1. **Wake up the server** (may take 50+ seconds):
+1. **SSH into VPS**
 ```bash
-curl https://smart-id-exvb.onrender.com
+ssh root@64.111.93.87
+cd ~/smart_id_backend
 ```
 
-2. **Wait 1-2 minutes if you get 502 errors**
-
-3. **Test again** - should work now:
+2. **Pull Latest Changes**
 ```bash
-curl https://smart-id-exvb.onrender.com
+git pull origin main
 ```
 
-Expected response:
-```json
-{
-  "message": "Campus ID SAAS API Server",
-  "version": "1.0.0",
-  "status": "healthy"
-}
+3. **Install Dependencies**
+```bash
+bun install
 ```
 
-### Keep Service Warm (Optional):
-Use services like UptimeRobot or cron-job.org to ping your service every 10-14 minutes to prevent cold starts.
+4. **Restart Backend**
+```bash
+pm2 restart campus-id-backend
+pm2 logs campus-id-backend --lines 20
+```
 
-## Common Issues:
+### PM2 Commands
+```bash
+pm2 status                    # Check status
+pm2 logs campus-id-backend    # View logs
+pm2 restart campus-id-backend # Restart
+pm2 stop campus-id-backend    # Stop
+pm2 start main.ts --name campus-id-backend --interpreter bun  # Start
+```
 
-- **Build fails**: Make sure all dependencies are in package.json
-- **App crashes**: Check environment variables are set correctly
-- **Database connection fails**: Verify MongoDB Atlas allows connections from 0.0.0.0/0
-- **CORS errors**: Update CORS_ORIGIN with your frontend domain
+### Nginx Configuration
+Location: `/etc/nginx/sites-available/mybackend.conf`
 
-## Production Security:
+```bash
+sudo nginx -t              # Test config
+sudo systemctl reload nginx # Reload
+```
 
-⚠️ **Important**: Change these before going live:
-- Generate new JWT secrets (64+ characters)
-- Use production email service (not Mailtrap)
-- Restrict MongoDB Atlas IP access
-- Use HTTPS for all URLs
+### SSL Certificate
+```bash
+sudo certbot --nginx -d smartunivid.xyz -d api.smartunivid.xyz
+```
+
+### Environment Variables
+Update `.env` on server (never commit to git):
+```bash
+nano .env
+```
+
+## Development Testing (Ngrok)
+
+### Setup
+1. Install Ngrok from Microsoft Store
+2. Get auth token from https://dashboard.ngrok.com
+3. Configure: `ngrok config add-authtoken YOUR_TOKEN`
+
+### Usage
+```bash
+# Terminal 1: Start backend
+bun main.ts
+
+# Terminal 2: Start Ngrok
+ngrok http 8000
+```
+
+Use the Ngrok URL for mobile testing.
+
+## Troubleshooting
+
+### Backend not responding
+```bash
+pm2 logs campus-id-backend --lines 50
+```
+
+### Port already in use
+```bash
+sudo lsof -i :8000
+kill -9 PID
+```
+
+### Database connection issues
+Check MongoDB Atlas connection string in `.env`
