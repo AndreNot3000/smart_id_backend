@@ -133,8 +133,10 @@ auth.post('/admin/register', async (c) => {
       }, 400);
     }
 
-    // Check if admin email already exists
-    const existingUser = await usersCollection.findOne({ email: data.adminEmail });
+    // Check if admin email already exists (case-insensitive)
+    const existingUser = await usersCollection.findOne({ 
+      email: { $regex: new RegExp(`^${data.adminEmail}$`, 'i') }
+    });
     if (existingUser) {
       return c.json({ error: 'Email already registered' }, 400);
     }
@@ -142,10 +144,10 @@ auth.post('/admin/register', async (c) => {
     // Hash password
     const passwordHash = await AuthService.hashPassword(data.password);
 
-    // Create admin user
+    // Create admin user (normalize email to lowercase)
     const avatar = `${data.adminFirstName[0]}${data.adminLastName[0]}`.toUpperCase();
     const newAdmin = {
-      email: data.adminEmail,
+      email: data.adminEmail.toLowerCase().trim(),
       passwordHash,
       userType: 'admin' as const,
       institutionId: institution._id!,
@@ -202,30 +204,33 @@ auth.post('/login', async (c) => {
     const usersCollection = getUsersCollection();
     console.log('📊 Database connection obtained');
 
+    // Normalize email for search (trim and lowercase)
+    const normalizedEmail = data.email.toLowerCase().trim();
+
     // Find user by email OR student ID (for students) OR lecturer ID (for lecturers)
     let user;
     
     if (data.userType === 'student') {
-      // For students, check both email and studentId
+      // For students, check both email and studentId (case-insensitive)
       user = await usersCollection.findOne({ 
         $or: [
-          { email: data.email, userType: 'student' },
+          { email: normalizedEmail, userType: 'student' },
           { 'profile.studentId': data.email, userType: 'student' }
         ]
       });
     } else if (data.userType === 'lecturer') {
-      // For lecturers, check both email and lecturerId
+      // For lecturers, check both email and lecturerId (case-insensitive)
       user = await usersCollection.findOne({ 
         $or: [
-          { email: data.email, userType: 'lecturer' },
+          { email: normalizedEmail, userType: 'lecturer' },
           { 'profile.lecturerId': data.email, userType: 'lecturer' }
         ]
       });
     } else {
-      // For admins, only check email
-      console.log('🔍 Searching for admin user:', { email: data.email, userType: data.userType });
+      // For admins, only check email (case-insensitive)
+      console.log('🔍 Searching for admin user:', { email: normalizedEmail, userType: data.userType });
       user = await usersCollection.findOne({ 
-        email: data.email, 
+        email: normalizedEmail,
         userType: data.userType 
       });
     }
