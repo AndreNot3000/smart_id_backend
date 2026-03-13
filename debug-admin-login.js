@@ -12,7 +12,15 @@ if (!email) {
 }
 
 async function checkAdminAccount() {
-  const client = new MongoClient(process.env.MONGODB_URI);
+  const mongoUri = process.env.MONGODB_URI || process.env.MONGODB_URL;
+  
+  if (!mongoUri) {
+    console.log('❌ MongoDB connection string not found in environment variables');
+    console.log('💡 Make sure MONGODB_URI or MONGODB_URL is set in your .env file');
+    process.exit(1);
+  }
+  
+  const client = new MongoClient(mongoUri);
   
   try {
     await client.connect();
