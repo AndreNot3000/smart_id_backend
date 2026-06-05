@@ -1,8 +1,32 @@
 import { ObjectId } from 'mongodb';
 
 export type PaymentStatus = 'pending' | 'success' | 'failed' | 'cancelled';
-export type PaymentType = 'wallet_topup' | 'cafeteria' | 'library_fine' | 'hostel' | 'transport' | 'other';
+export type PaymentType =
+  | 'wallet_topup'
+  | 'tuition'
+  | 'school_fees'
+  | 'departmental_dues'
+  | 'cafeteria'
+  | 'library_fine'
+  | 'hostel'
+  | 'transport'
+  | 'other';
+
+export type PaymentGateway = 'paystack' | 'wallet';
 export type TransactionType = 'credit' | 'debit';
+
+export interface WalletDedicatedAccount {
+  accountNumber: string;
+  accountName: string;
+  bankName: string;
+  bankSlug?: string;
+  paystackDedicatedId?: number;
+  paystackCustomerCode: string;
+  status: 'active' | 'pending';
+  assignedAt?: Date;
+  /** Demo account when Paystack DVA is unavailable (no real transfers) */
+  isMock?: boolean;
+}
 
 // Wallet model
 export interface Wallet {
@@ -12,6 +36,8 @@ export interface Wallet {
   currency: string; // NGN
   institutionId: ObjectId;
   isActive: boolean;
+  paystackCustomerCode?: string;
+  dedicatedAccount?: WalletDedicatedAccount;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -27,7 +53,7 @@ export interface Payment {
   paymentType: PaymentType;
   transactionType: TransactionType; // credit or debit
   status: PaymentStatus;
-  paymentGateway: 'paystack';
+  paymentGateway: PaymentGateway;
   paystackResponse?: any; // Store Paystack response
   description?: string;
   metadata?: any;

@@ -3,7 +3,12 @@ import { z } from 'zod';
 import { ObjectId } from 'mongodb';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 import { QRService } from '../services/qr.services.js';
-import { getUsersCollection, getAttendanceCollection } from '../database/connection.js';
+import {
+  getUsersCollection,
+  getAttendanceCollection,
+  getSessionsCollection,
+  getSessionPresenceCollection,
+} from '../database/connection.js';
 import { sanitizeString } from '../utils/sanitize.js';
 import { APP_CONSTANTS } from '../config/constants.js';
 
@@ -15,6 +20,7 @@ const verifyQRSchema = z.object({
   purpose: z.string().optional(),
   location: z.string().optional(),
   notes: z.string().optional(),
+  sessionId: z.string().optional(), // when present, scan is tied to an attendance session
 });
 
 /**
@@ -160,96 +166,221 @@ qr.post('/verify', authMiddleware, async (c) => {
  * Only works for students
  */
 qr.post('/scan-attendance', authMiddleware, async (c) => {
+  const t0 = performance.now();
   try {
     const authUser = c.get('user');
-    
-    // Only lecturers and admins can scan for attendance
+
     if (authUser.userType === 'student') {
-      return c.json({ 
-        error: 'Students cannot scan for attendance. Only lecturers and admins.' 
+      return c.json({
+        error: 'Students cannot scan for attendance. Only lecturers and admins.',
       }, 403);
     }
 
     const body = await c.req.json();
     const data = verifyQRSchema.parse(body);
 
-    // Sanitize inputs
     const sanitizedData = {
       qrData: data.qrData,
       purpose: data.purpose ? sanitizeString(data.purpose) : 'Attendance',
       location: data.location ? sanitizeString(data.location) : undefined,
       notes: data.notes ? sanitizeString(data.notes) : undefined,
+      sessionId: data.sessionId && ObjectId.isValid(data.sessionId) ? data.sessionId : undefined,
     };
 
-    // Verify QR code
+    // Single JWT verification (previously done 2-3 times)
     const decoded = QRService.verifyQRToken(sanitizedData.qrData);
-    
-    // Check institution match
+
     if (decoded.institutionId !== authUser.institutionId) {
-      return c.json({ 
-        error: 'Cannot scan QR code from a different institution' 
+      return c.json({
+        error: 'Cannot scan QR code from a different institution',
       }, 403);
     }
 
-    // Only students can have attendance marked
     if (decoded.userType !== 'student') {
-      return c.json({ 
-        error: 'Attendance can only be marked for students' 
+      return c.json({
+        error: 'Attendance can only be marked for students',
       }, 400);
     }
 
-    // Get student info
-    const studentInfo = await QRService.getStudentInfoFromQR(sanitizedData.qrData);
-
-    // Record attendance
+    const usersCollection = getUsersCollection();
     const attendanceCollection = getAttendanceCollection();
-    const attendanceRecord = {
-      studentId: new ObjectId(decoded.userId),
+    const sessionsCollection = getSessionsCollection();
+    const presenceCollection = getSessionPresenceCollection();
+
+    // ----- Session validation (only when sessionId provided) -----
+    // We resolve the session up-front so we can attach courseId / location to
+    // both the attendance log entry and the presence row. This is one extra
+    // round-trip but the result feeds the next steps, so we run it in
+    // parallel with the student fetch below.
+    const studentObjectId = new ObjectId(decoded.userId);
+    const scannedAt = new Date();
+    const sessionObjectId = sanitizedData.sessionId ? new ObjectId(sanitizedData.sessionId) : null;
+
+    const [student, session] = await Promise.all([
+      usersCollection.findOne(
+        { _id: studentObjectId, userType: 'student' },
+        {
+          projection: {
+            email: 1,
+            status: 1,
+            emailVerified: 1,
+            'profile.firstName': 1,
+            'profile.lastName': 1,
+            'profile.studentId': 1,
+            'profile.department': 1,
+            'profile.year': 1,
+            'profile.avatar': 1,
+          },
+        }
+      ),
+      sessionObjectId
+        ? sessionsCollection.findOne({
+            _id: sessionObjectId,
+            institutionId: authUser.institutionId,
+          })
+        : Promise.resolve(null),
+    ]);
+
+    if (!student) {
+      return c.json({ error: 'Student not found' }, 404);
+    }
+
+    let sessionInfo: {
+      sessionId: string;
+      courseId: string;
+      courseCode: string;
+      courseName: string;
+      type: 'class' | 'test' | 'exam';
+      location: string;
+      presentCount: number;
+      expectedCount: number;
+      alreadyMarked: boolean;
+      inRoster: boolean;
+    } | null = null;
+
+    if (sessionObjectId) {
+      if (!session) return c.json({ error: 'Session not found' }, 404);
+      if (session.status !== 'active') {
+        return c.json({
+          error: session.status === 'closed' ? 'Session is already closed' : 'Session is not active',
+        }, 409);
+      }
+      // Lecturer must own the session (admins always allowed)
+      if (authUser.userType === 'lecturer' && session.lecturerId.toString() !== authUser.userId) {
+        return c.json({ error: 'This session belongs to another lecturer' }, 403);
+      }
+      const inRoster = (session.rosterSnapshot || []).includes(studentObjectId.toString());
+      if (!inRoster) {
+        return c.json({
+          error: 'Student is not enrolled in this course',
+          notInRoster: true,
+          studentName: `${student.profile.firstName} ${student.profile.lastName}`,
+        }, 409);
+      }
+
+      // Determine if the student was already marked. Upsert the presence row
+      // and inspect the result to decide present vs already-marked.
+      const presenceResult = await presenceCollection.updateOne(
+        { sessionId: session._id!, studentId: studentObjectId },
+        {
+          $setOnInsert: {
+            sessionId: session._id!,
+            studentId: studentObjectId,
+            institutionId: authUser.institutionId,
+            presence: 'present',
+            source: 'qr',
+            markedBy: new ObjectId(authUser.userId),
+            markedAt: scannedAt,
+          },
+        },
+        { upsert: true }
+      );
+      const alreadyMarked = presenceResult.upsertedCount === 0;
+
+      // Only bump presentCount when this is a brand-new presence.
+      if (!alreadyMarked) {
+        await sessionsCollection.updateOne(
+          { _id: session._id },
+          { $inc: { presentCount: 1 }, $set: { updatedAt: scannedAt } }
+        );
+      }
+
+      sessionInfo = {
+        sessionId: session._id!.toString(),
+        courseId: session.courseId.toString(),
+        courseCode: session.courseCode,
+        courseName: session.courseName,
+        type: session.type,
+        location: session.location || '',
+        presentCount: (session.presentCount || 0) + (alreadyMarked ? 0 : 1),
+        expectedCount: session.expectedCount || 0,
+        alreadyMarked,
+        inRoster: true,
+      };
+
+      // Use session's location/purpose if the scan didn't override.
+      sanitizedData.location = sanitizedData.location || session.location;
+      sanitizedData.purpose = sanitizedData.purpose === 'Attendance'
+        ? `${session.type === 'class' ? 'Class' : session.type === 'test' ? 'Test' : 'Exam'}: ${session.title}`
+        : sanitizedData.purpose;
+    }
+
+    // Always log the raw scan in `attendance` for audit purposes — even
+    // duplicates within a session, so a lecturer can see "Jane scanned at
+    // 10:02 and again at 10:14".
+    const attendanceDoc: any = {
+      studentId: studentObjectId,
       scannedBy: new ObjectId(authUser.userId),
       scannedByType: authUser.userType as 'lecturer' | 'admin',
       purpose: sanitizedData.purpose,
       location: sanitizedData.location,
       notes: sanitizedData.notes,
-      scannedAt: new Date(),
-      createdAt: new Date(),
+      scannedAt,
+      createdAt: scannedAt,
     };
+    if (sessionInfo) {
+      attendanceDoc.sessionId = new ObjectId(sessionInfo.sessionId);
+      attendanceDoc.sessionType = sessionInfo.type;
+      attendanceDoc.courseId = new ObjectId(sessionInfo.courseId);
+    }
+    const insertResult = await attendanceCollection.insertOne(attendanceDoc);
 
-    const result = await attendanceCollection.insertOne(attendanceRecord);
-
-    // Get scanner info
-    const usersCollection = getUsersCollection();
-    const scanner = await usersCollection.findOne({ 
-      _id: new ObjectId(authUser.userId) 
-    });
+    const elapsed = Math.round(performance.now() - t0);
+    c.header('X-Response-Time', `${elapsed}ms`);
+    if (elapsed > 300) console.log(`[scan-attendance] slow path: ${elapsed}ms`);
 
     return c.json({
-      message: 'Attendance marked successfully',
-      attendanceId: result.insertedId.toString(),
+      message: sessionInfo?.alreadyMarked
+        ? 'Already marked present for this session'
+        : 'Attendance marked successfully',
+      attendanceId: insertResult.insertedId.toString(),
       student: {
-        studentId: studentInfo.studentId,
-        name: `${studentInfo.firstName} ${studentInfo.lastName}`,
-        department: studentInfo.department,
-        year: studentInfo.year,
-      },
-      scannedBy: {
-        name: scanner ? `${scanner.profile.firstName} ${scanner.profile.lastName}` : 'Unknown',
-        userType: authUser.userType,
+        studentId: student.profile.studentId || '',
+        firstName: student.profile.firstName,
+        lastName: student.profile.lastName,
+        name: `${student.profile.firstName} ${student.profile.lastName}`,
+        department: student.profile.department || '',
+        year: student.profile.year || '',
+        avatar: student.profile.avatar || null,
+        email: student.email,
+        status: student.status,
       },
       purpose: sanitizedData.purpose,
       location: sanitizedData.location,
-      scannedAt: attendanceRecord.scannedAt.toISOString(),
+      session: sessionInfo,
+      scannedAt: scannedAt.toISOString(),
+      serverTimeMs: elapsed,
     }, 201);
-
   } catch (error: any) {
     console.error('Scan attendance error:', error.message);
-    
-    if (error.message.includes('Invalid')) {
-      return c.json({ 
+
+    if (error.message?.includes('Invalid')) {
+      return c.json({
         error: 'Invalid QR code',
         message: 'This QR code is invalid or corrupted.',
       }, 400);
     }
-    
+
     return c.json({ error: 'Failed to mark attendance' }, 500);
   }
 });

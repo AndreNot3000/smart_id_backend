@@ -404,3 +404,179 @@ export async function sendLecturerActivationEmail(
     throw error; // Throw error so caller knows email failed
   }
 }
+
+
+export async function sendDeadlineReminderEmail(
+  email: string,
+  studentName: string,
+  courseCode: string,
+  courseName: string,
+  assignmentTitle: string,
+  deadline: Date,
+  hoursLeft: number
+): Promise<void> {
+  try {
+    const transporter = createTransporter();
+    const deadlineStr = deadline.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const urgencyColor = hoursLeft <= 3 ? '#dc3545' : hoursLeft <= 6 ? '#fd7e14' : '#ffc107';
+    const urgencyText = hoursLeft <= 3 ? 'URGENT' : hoursLeft <= 6 ? 'Reminder' : 'Heads up';
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #2c3e50; margin: 0;">🎓 Campus ID System</h1>
+        </div>
+        <div style="background: #f8f9fa; padding: 30px; border-radius: 10px; border-left: 4px solid ${urgencyColor};">
+          <h2 style="color: ${urgencyColor}; margin-top: 0;">⏰ ${urgencyText}: Assignment Due Soon</h2>
+          <p style="color: #555; font-size: 16px; line-height: 1.6;">
+            Hi <strong>${studentName}</strong>, your assignment is due in <strong>${hoursLeft} hour${hoursLeft !== 1 ? 's' : ''}</strong>.
+          </p>
+          <div style="background: #ffffff; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #dee2e6;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Course</td><td style="padding: 8px 0; color: #333; font-weight: bold; font-size: 14px;">${courseCode} — ${courseName}</td></tr>
+              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Assignment</td><td style="padding: 8px 0; color: #333; font-weight: bold; font-size: 14px;">${assignmentTitle}</td></tr>
+              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Deadline</td><td style="padding: 8px 0; color: ${urgencyColor}; font-weight: bold; font-size: 14px;">${deadlineStr}</td></tr>
+            </table>
+          </div>
+          <p style="color: #555; font-size: 14px;">Don't forget to submit before the deadline. Late submissions may not be accepted.</p>
+        </div>
+        <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+          <p style="color: #999; font-size: 12px; margin: 0;">Campus ID System — Secure Student Management Platform</p>
+        </div>
+      </div>
+    `;
+
+    const fromEmail = process.env.MAILTRAP_API_TOKEN
+      ? `"Campus ID System" <hello@demomailtrap.com>`
+      : `"Campus ID System" <${process.env.SMTP_USER}>`;
+
+    await transporter.sendMail({
+      from: fromEmail,
+      to: email,
+      subject: `⏰ ${urgencyText}: "${assignmentTitle}" due in ${hoursLeft}h — ${courseCode}`,
+      html,
+    });
+
+    console.log(`✅ Deadline reminder sent to ${email} for ${assignmentTitle}`);
+  } catch (error: any) {
+    console.error(`❌ Failed to send deadline reminder to ${email}:`, error.message);
+  }
+}
+
+
+export async function sendNewAssignmentEmail(
+  email: string,
+  studentName: string,
+  courseCode: string,
+  courseName: string,
+  assignmentTitle: string,
+  description: string,
+  deadline: Date,
+  lecturerName: string
+): Promise<void> {
+  try {
+    const transporter = createTransporter();
+    const deadlineStr = deadline.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #2c3e50; margin: 0;">🎓 Campus ID System</h1>
+        </div>
+        <div style="background: #f8f9fa; padding: 30px; border-radius: 10px; border-left: 4px solid #007bff;">
+          <h2 style="color: #007bff; margin-top: 0;">📝 New Assignment Posted</h2>
+          <p style="color: #555; font-size: 16px; line-height: 1.6;">
+            Hi <strong>${studentName}</strong>, a new assignment has been posted for your course.
+          </p>
+          <div style="background: #ffffff; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #dee2e6;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Course</td><td style="padding: 8px 0; color: #333; font-weight: bold; font-size: 14px;">${courseCode} — ${courseName}</td></tr>
+              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Assignment</td><td style="padding: 8px 0; color: #333; font-weight: bold; font-size: 14px;">${assignmentTitle}</td></tr>
+              ${description ? `<tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Details</td><td style="padding: 8px 0; color: #555; font-size: 14px;">${description}</td></tr>` : ''}
+              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Deadline</td><td style="padding: 8px 0; color: #dc3545; font-weight: bold; font-size: 14px;">${deadlineStr}</td></tr>
+              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Lecturer</td><td style="padding: 8px 0; color: #333; font-size: 14px;">${lecturerName}</td></tr>
+            </table>
+          </div>
+          <p style="color: #555; font-size: 14px;">Log in to your dashboard to view and submit the assignment.</p>
+        </div>
+        <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+          <p style="color: #999; font-size: 12px; margin: 0;">Campus ID System — Secure Student Management Platform</p>
+        </div>
+      </div>
+    `;
+
+    const fromEmail = process.env.MAILTRAP_API_TOKEN
+      ? `"Campus ID System" <hello@demomailtrap.com>`
+      : `"Campus ID System" <${process.env.SMTP_USER}>`;
+
+    await transporter.sendMail({
+      from: fromEmail,
+      to: email,
+      subject: `📝 New Assignment: "${assignmentTitle}" — ${courseCode}`,
+      html,
+    });
+
+    console.log(`✅ New assignment email sent to ${email} for ${assignmentTitle}`);
+  } catch (error: any) {
+    console.error(`❌ Failed to send new assignment email to ${email}:`, error.message);
+  }
+}
+
+
+export async function sendNewAssignmentEmail(
+  email: string,
+  studentName: string,
+  courseCode: string,
+  courseName: string,
+  assignmentTitle: string,
+  description: string,
+  deadline: Date,
+  lecturerName: string
+): Promise<void> {
+  try {
+    const transporter = createTransporter();
+    const deadlineStr = deadline.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #2c3e50; margin: 0;">🎓 Campus ID System</h1>
+        </div>
+        <div style="background: #f8f9fa; padding: 30px; border-radius: 10px; border-left: 4px solid #007bff;">
+          <h2 style="color: #007bff; margin-top: 0;">📝 New Assignment Posted</h2>
+          <p style="color: #555; font-size: 16px; line-height: 1.6;">
+            Hi <strong>${studentName}</strong>, a new assignment has been posted for your course.
+          </p>
+          <div style="background: #ffffff; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #dee2e6;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Course</td><td style="padding: 8px 0; color: #333; font-weight: bold; font-size: 14px;">${courseCode} — ${courseName}</td></tr>
+              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Assignment</td><td style="padding: 8px 0; color: #333; font-weight: bold; font-size: 14px;">${assignmentTitle}</td></tr>
+              ${description ? `<tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Details</td><td style="padding: 8px 0; color: #555; font-size: 14px;">${description}</td></tr>` : ''}
+              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Deadline</td><td style="padding: 8px 0; color: #dc3545; font-weight: bold; font-size: 14px;">${deadlineStr}</td></tr>
+              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Lecturer</td><td style="padding: 8px 0; color: #555; font-size: 14px;">${lecturerName}</td></tr>
+            </table>
+          </div>
+          <p style="color: #555; font-size: 14px;">Log in to your dashboard to view and submit the assignment before the deadline.</p>
+        </div>
+        <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+          <p style="color: #999; font-size: 12px; margin: 0;">Campus ID System — Secure Student Management Platform</p>
+        </div>
+      </div>
+    `;
+
+    const fromEmail = process.env.MAILTRAP_API_TOKEN
+      ? `"Campus ID System" <hello@demomailtrap.com>`
+      : `"Campus ID System" <${process.env.SMTP_USER}>`;
+
+    await transporter.sendMail({
+      from: fromEmail,
+      to: email,
+      subject: `📝 New Assignment: "${assignmentTitle}" — ${courseCode}`,
+      html,
+    });
+
+    console.log(`✅ New assignment email sent to ${email} for ${assignmentTitle}`);
+  } catch (error: any) {
+    console.error(`❌ Failed to send new assignment email to ${email}:`, error.message);
+  }
+}

@@ -16,7 +16,7 @@ export const APP_CONSTANTS = {
 
   // Token Configuration
   TOKEN: {
-    ACCESS_TOKEN_EXPIRY: '1h', // Changed from 24h for security
+    ACCESS_TOKEN_EXPIRY: '4h',
     REFRESH_TOKEN_EXPIRY: '7d',
     VERIFICATION_TOKEN_LENGTH: 32,
     VERIFICATION_TOKEN_EXPIRY: 24 * 60 * 60 * 1000, // 24 hours in ms

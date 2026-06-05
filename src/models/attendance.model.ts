@@ -5,8 +5,10 @@ export interface Attendance {
   studentId: ObjectId;
   scannedBy: ObjectId; // Lecturer or Admin who scanned
   scannedByType: 'lecturer' | 'admin';
-  courseId?: ObjectId; // Optional: if you add courses later
-  location?: string; // Optional: GPS coordinates or room number
+  courseId?: ObjectId; // Set when the scan is tied to an attendance session
+  sessionId?: ObjectId; // Tie a scan to a concrete class/test/exam session
+  sessionType?: 'class' | 'test' | 'exam';
+  location?: string; // Inherited from session when present
   purpose?: string; // e.g., "Class Attendance", "Event Check-in", "ID Verification"
   notes?: string;
   scannedAt: Date;

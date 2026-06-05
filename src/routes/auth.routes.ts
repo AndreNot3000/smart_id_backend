@@ -311,7 +311,7 @@ auth.post('/login', async (c) => {
       ...tokens
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('❌ Login error:', error);
     console.error('🔍 Error stack:', error.stack);
     if (error instanceof z.ZodError) {
@@ -482,7 +482,7 @@ auth.get('/verify-email', async (c) => {
       </html>
     `);
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('❌ Email verification error:', error);
     console.error('🔍 Error stack:', error.stack);
     return c.json({ 

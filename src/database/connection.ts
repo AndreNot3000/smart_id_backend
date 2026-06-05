@@ -1,12 +1,47 @@
 import { MongoClient, Db, Collection } from 'mongodb';
-import type { Document } from 'mongodb';
+import type { Document, MongoClientOptions } from 'mongodb';
 import type { Institution } from '../models/institution.model.js';
 import type { User, OTPCode } from '../models/user.model.js';
 import type { Attendance } from '../models/attendance.model.js';
 import type { Wallet, Payment, ServicePayment } from '../models/payment.model.js';
+import type { CourseEnrollment } from '../models/enrollment.model.js';
+import type { AttendanceSession, SessionPresenceRecord } from '../models/session.model.js';
 
 let client: MongoClient;
 let db: Db;
+
+function isAtlasUrl(url: string): boolean {
+  return url.includes('mongodb+srv') || url.includes('mongodb.net');
+}
+
+function buildMongoOptions(url: string): MongoClientOptions {
+  const options: MongoClientOptions = {
+    maxPoolSize: 10,
+    serverSelectionTimeoutMS: 10000,
+    socketTimeoutMS: 45000,
+    connectTimeoutMS: 10000,
+    family: 4,
+    retryWrites: true,
+    w: 'majority',
+  };
+
+  // Atlas over TLS often fails certificate verification on Windows dev machines
+  // (UNABLE_TO_VERIFY_LEAF_SIGNATURE). Relax verification in development unless
+  // MONGODB_TLS_STRICT=true is set. Always enforce verification in production.
+  if (isAtlasUrl(url)) {
+    const isProduction = process.env.NODE_ENV === 'production';
+    const strictTls = process.env.MONGODB_TLS_STRICT === 'true';
+    if (!isProduction && !strictTls) {
+      options.tlsAllowInvalidCertificates = true;
+      console.warn(
+        '⚠️  MongoDB TLS verification relaxed for local Atlas dev. ' +
+          'Use mongodb+srv:// from Atlas if possible, or set MONGODB_TLS_STRICT=true to enforce.'
+      );
+    }
+  }
+
+  return options;
+}
 
 export async function initDatabase() {
   try {
@@ -15,21 +50,9 @@ export async function initDatabase() {
     
     console.log('🔄 Connecting to MongoDB...');
     console.log('📍 Database name:', dbName);
-    // Don't log full URL for security, just check if it's Atlas
-    console.log('🌐 Connection type:', mongoUrl.includes('mongodb+srv') ? 'MongoDB Atlas' : 'Local MongoDB');
+    console.log('🌐 Connection type:', isAtlasUrl(mongoUrl) ? 'MongoDB Atlas' : 'Local MongoDB');
     
-    // MongoDB connection options for better reliability
-    const options = {
-      maxPoolSize: 10,
-      serverSelectionTimeoutMS: 10000, // Increased timeout
-      socketTimeoutMS: 45000,
-      connectTimeoutMS: 10000,
-      family: 4, // Use IPv4, skip trying IPv6
-      retryWrites: true,
-      w: 'majority'
-    };
-    
-    client = new MongoClient(mongoUrl, options);
+    client = new MongoClient(mongoUrl, buildMongoOptions(mongoUrl));
     await client.connect();
     
     // Test the connection
@@ -69,6 +92,10 @@ export const getInstitutionsCollection = () => getCollection<Institution>('insti
 export const getUsersCollection = () => getCollection<User>('users');
 export const getOTPCollection = () => getCollection<OTPCode>('otp_codes');
 export const getAttendanceCollection = () => getCollection<Attendance>('attendance');
+export const getEnrollmentsCollection = () => getCollection<CourseEnrollment>('course_enrollments');
+export const getSessionsCollection = () => getCollection<AttendanceSession>('attendance_sessions');
+export const getSessionPresenceCollection = () =>
+  getCollection<SessionPresenceRecord>('session_presence');
 
 async function createIndexes() {
   const institutionsCol = getInstitutionsCollection();
@@ -114,6 +141,8 @@ async function createIndexes() {
   
   await walletsCol.createIndex({ userId: 1 }, { unique: true });
   await walletsCol.createIndex({ institutionId: 1 });
+  await walletsCol.createIndex({ 'dedicatedAccount.accountNumber': 1 }, { sparse: true });
+  await walletsCol.createIndex({ paystackCustomerCode: 1 }, { sparse: true });
   
   await paymentsCol.createIndex({ userId: 1 });
   await paymentsCol.createIndex({ reference: 1 }, { unique: true });
@@ -125,7 +154,53 @@ async function createIndexes() {
   await servicePaymentsCol.createIndex({ reference: 1 });
   await servicePaymentsCol.createIndex({ status: 1 });
   await servicePaymentsCol.createIndex({ createdAt: -1 });
+
+  const payableItemsCol = db.collection('payable_items');
+  await payableItemsCol.createIndex({ institutionId: 1, status: 1, sortOrder: 1 });
+  await payableItemsCol.createIndex({ institutionId: 1, slug: 1 }, { unique: true });
   
+  // Schedule indexes
+  const schedulesCol = db.collection('schedules');
+  await schedulesCol.createIndex({ institutionId: 1, department: 1, level: 1 });
+  await schedulesCol.createIndex({ lecturerId: 1 });
+  await schedulesCol.createIndex({ institutionId: 1, lecturerId: 1, dayOfWeek: 1 });
+
+  // Course enrollment indexes — one (courseId, studentId) pair can exist only once
+  const enrollmentsCol = getEnrollmentsCollection();
+  await enrollmentsCol.createIndex(
+    { courseId: 1, studentId: 1 },
+    { unique: true }
+  );
+  await enrollmentsCol.createIndex({ studentId: 1, status: 1 });
+  await enrollmentsCol.createIndex({ courseId: 1, status: 1 });
+  await enrollmentsCol.createIndex({ institutionId: 1 });
+
+  // Attendance session indexes
+  const sessionsCol = getSessionsCollection();
+  await sessionsCol.createIndex({ institutionId: 1, scheduledAt: -1 });
+  await sessionsCol.createIndex({ courseId: 1, scheduledAt: -1 });
+  await sessionsCol.createIndex({ lecturerId: 1, status: 1, scheduledAt: -1 });
+  await sessionsCol.createIndex({ status: 1 });
+
+  // Session presence — one record per (session, student)
+  const presenceCol = getSessionPresenceCollection();
+  await presenceCol.createIndex(
+    { sessionId: 1, studentId: 1 },
+    { unique: true }
+  );
+  await presenceCol.createIndex({ sessionId: 1 });
+  await presenceCol.createIndex({ studentId: 1, markedAt: -1 });
+
+  // Backfill: link attendance records to sessions for fast lookup
+  await attendanceCol.createIndex({ sessionId: 1 }, { sparse: true });
+
+  // Gradebook: one assessment scheme per course; one manual score per (course, component, student)
+  const schemesCol = getDatabase().collection('assessment_schemes');
+  await schemesCol.createIndex({ courseId: 1 }, { unique: true });
+  const gradebookScoresCol = getDatabase().collection('gradebook_scores');
+  await gradebookScoresCol.createIndex({ courseId: 1, componentId: 1, studentId: 1 }, { unique: true });
+  await gradebookScoresCol.createIndex({ courseId: 1, studentId: 1 });
+
   console.log('✅ Database indexes created');
 }
 

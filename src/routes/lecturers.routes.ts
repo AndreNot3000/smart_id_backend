@@ -101,4 +101,100 @@ lecturers.get('/students', authMiddleware, async (c) => {
   }
 });
 
+// GET /lecturers/stats - Real-time lecturer dashboard stats
+lecturers.get('/stats', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    if (user.userType !== 'lecturer') return c.json({ error: 'Only lecturers' }, 403);
+
+    const db = getDatabase();
+    const lecturer = await db.collection('users').findOne({ email: user.email });
+    if (!lecturer) return c.json({ error: 'Lecturer not found' }, 404);
+
+    const lecturerId = lecturer._id.toString();
+    const institutionId = lecturer.institutionId;
+    const department = lecturer.profile?.department || '';
+
+    // Total courses assigned to this lecturer or in their department
+    const totalCourses = await db.collection('courses').countDocuments({
+      institutionId,
+      $or: [{ lecturerIds: lecturerId }, { department }]
+    });
+
+    // Total students in lecturer's department
+    const totalStudents = await db.collection('users').countDocuments({
+      institutionId,
+      userType: 'student',
+      'profile.department': department,
+      status: { $in: ['active', 'pending'] }
+    });
+
+    // Total schedule entries this week
+    const now = new Date();
+    const day = now.getDay();
+    const mondayDiff = now.getDate() - day + (day === 0 ? -6 : 1);
+    const monday = new Date(now);
+    monday.setDate(mondayDiff);
+    monday.setHours(0, 0, 0, 0);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+    const mondayStr = monday.toISOString().split('T')[0];
+    const sundayStr = sunday.toISOString().split('T')[0];
+
+    const totalClassesThisWeek = await db.collection('schedules').countDocuments({
+      lecturerId: lecturer._id,
+      date: { $gte: mondayStr, $lte: sundayStr },
+      status: { $ne: 'cancelled' }
+    });
+
+    // Today's classes
+    const todayStr = now.toISOString().split('T')[0];
+    const todayClasses = await db.collection('schedules').countDocuments({
+      lecturerId: lecturer._id,
+      date: todayStr,
+      status: { $ne: 'cancelled' }
+    });
+
+    // Total assignments created by this lecturer
+    const totalAssignments = await db.collection('assignments').countDocuments({
+      lecturerId: lecturerId,
+      institutionId
+    });
+
+    // Pending submissions to grade (submissions without a score)
+    const pendingGrading = await db.collection('assignment_submissions').countDocuments({
+      institutionId,
+      score: { $exists: false }
+    });
+
+    // Total quizzes
+    const totalQuizzes = await db.collection('quizzes').countDocuments({
+      lecturerId: lecturerId,
+      institutionId
+    });
+
+    // Total materials uploaded
+    const totalMaterials = await db.collection('course_materials').countDocuments({
+      uploadedBy: lecturerId,
+      institutionId
+    });
+
+    return c.json({
+      stats: {
+        totalCourses,
+        totalStudents,
+        totalClassesThisWeek,
+        todayClasses,
+        totalAssignments,
+        pendingGrading,
+        totalQuizzes,
+        totalMaterials,
+      }
+    });
+  } catch (error: any) {
+    return c.json({ error: 'Failed to fetch stats', details: error.message }, 500);
+  }
+});
+
 export default lecturers;

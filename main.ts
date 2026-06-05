@@ -12,9 +12,14 @@ import adminRoutes from './src/routes/admin.routes.js';
 import qrRoutes from './src/routes/qr.routes.js';
 import paymentRoutes from './src/routes/payment.routes.js';
 import lecturersRoutes from './src/routes/lecturers.routes.js';
+import scheduleRoutes from './src/routes/schedule.routes.js';
+import courseRoutes from './src/routes/course.routes.js';
+import quizRoutes from './src/routes/quiz.routes.js';
+import attendanceRoutes from './src/routes/attendance.routes.js';
 
 // Database
 import { initDatabase } from './src/database/connection.js';
+import { startDeadlineReminder } from './src/services/deadline-reminder.js';
 
 const app = new Hono();
 
@@ -40,6 +45,11 @@ app.use('*', cors({
       return origin;
     }
     
+    // Allow Cloudflare Tunnel (trycloudflare.com) for cross-device dev testing
+    if (origin.includes('.trycloudflare.com')) {
+      return origin;
+    }
+    
     // Allow Vercel preview deployments
     if (origin.includes('.vercel.app')) {
       return origin;
@@ -47,9 +57,18 @@ app.use('*', cors({
     
     return allowedOrigins[0]; // fallback to first allowed origin
   },
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Super-Admin-Key'],
+  allowHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Super-Admin-Key',
+    'ngrok-skip-browser-warning',
+    'X-Requested-With',
+    'Accept',
+  ],
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  exposeHeaders: ['Content-Length', 'X-Response-Time'],
   credentials: true,
+  maxAge: 86400,
 }));
 
 // Health check
@@ -70,6 +89,10 @@ app.route('/api/admin', adminRoutes);
 app.route('/api/qr', qrRoutes);
 app.route('/api/payments', paymentRoutes);
 app.route('/api/lecturers', lecturersRoutes);
+app.route('/api/schedule', scheduleRoutes);
+app.route('/api/course', courseRoutes);
+app.route('/api/quiz', quizRoutes);
+app.route('/api/attendance', attendanceRoutes);
 
 // 404 handler
 app.notFound((c) => {
@@ -101,6 +124,9 @@ async function startServer() {
     });
     
     console.log(`🚀 Server running on http://0.0.0.0:${port}`);
+    
+    // Start background jobs
+    startDeadlineReminder();
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);
