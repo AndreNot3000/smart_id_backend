@@ -1,0 +1,5 @@
+# Caddy auto-provisions a free Let's Encrypt HTTPS certificate for this domain
+# as long as api.smartunivid.xyz points to this server and ports 80/443 are open.
+api.smartunivid.xyz {
+	reverse_proxy localhost:8000
+}

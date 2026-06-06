@@ -1,0 +1,17 @@
+[Unit]
+Description=Campus ID Backend (Bun + Hono)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/campus-id-backend
+# Bun installs to ~/.bun/bin/bun for the ubuntu user.
+ExecStart=/home/ubuntu/.bun/bin/bun run main.ts
+Restart=always
+RestartSec=5
+# Env vars are read from the .env file in WorkingDirectory (main.ts loads dotenv).
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
