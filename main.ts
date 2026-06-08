@@ -77,7 +77,6 @@ app.get('/', (c) => {
     message: 'Campus ID SAAS API Server', 
     version: '1.0.1',
     status: 'healthy',
-    deploy: 'github-actions',
     timestamp: new Date().toISOString()
   });
 });
