@@ -122,7 +122,7 @@ user.put('/profile', authMiddleware, async (c) => {
     const authUser = c.get('user');
     const userId = new ObjectId(authUser.userId);
     const body = await c.req.json();
-    const { firstName, lastName, phone, address, dateOfBirth, department, year, title } = body;
+    const { firstName, lastName, phone, address, dateOfBirth, department, year, title, specialization } = body;
 
     const updateData: any = {
       updatedAt: new Date()
@@ -137,6 +137,7 @@ user.put('/profile', authMiddleware, async (c) => {
     if (department !== undefined) updateData['profile.department'] = department;
     if (year !== undefined) updateData['profile.year'] = year;
     if (title !== undefined) updateData['profile.title'] = title;
+    if (specialization !== undefined) updateData['profile.specialization'] = specialization;
 
     const result = await usersCollection.findOneAndUpdate(
       { _id: userId },
