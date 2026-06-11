@@ -1,47 +1,100 @@
 import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import { getConfig } from '../config/constants.js';
 
-// Create transporter for Mailtrap (supports both Sandbox and Email API)
-const createTransporter = () => {
-  const config = getConfig();
-  
-  // Check if we're using Email API or Sandbox
-  const isEmailAPI = process.env.MAILTRAP_API_TOKEN;
-  
-  if (isEmailAPI) {
+/**
+ * Email transport.
+ *
+ * Production: real emails are sent via the Resend HTTP API. Set RESEND_API_KEY
+ * and EMAIL_FROM (a verified sender, e.g. "Campus ID <no-reply@smartunivid.xyz>").
+ *
+ * Local dev: when RESEND_API_KEY is not set, we transparently fall back to
+ * Mailtrap SMTP (sandbox or live token) so testing still works without sending
+ * real mail. No call site needs to know which transport is active.
+ */
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+
+// Default sender. Override with EMAIL_FROM once your domain is verified in
+// Resend. `onboarding@resend.dev` works out of the box but only delivers to the
+// Resend account owner's address — fine for a first smoke test.
+const EMAIL_FROM = process.env.EMAIL_FROM || 'Campus ID <onboarding@resend.dev>';
+
+let resendClient: Resend | null = null;
+function getResend(): Resend | null {
+  if (!RESEND_API_KEY) return null;
+  if (!resendClient) resendClient = new Resend(RESEND_API_KEY);
+  return resendClient;
+}
+
+// Build a sender string that keeps the verified address from EMAIL_FROM but
+// swaps in a custom display name (e.g. "University of X - Campus ID").
+function senderWithName(name?: string): string {
+  if (!name) return EMAIL_FROM;
+  const match = EMAIL_FROM.match(/<([^>]+)>/);
+  const address = match ? match[1] : EMAIL_FROM;
+  return `${name} <${address}>`;
+}
+
+// SMTP fallback transporter (local dev / Mailtrap) — only used when Resend is
+// not configured.
+const createSmtpTransporter = () => {
+  if (process.env.MAILTRAP_API_TOKEN) {
     return nodemailer.createTransport({
       host: 'live.smtp.mailtrap.io',
       port: 587,
       secure: false,
-      auth: {
-        user: 'api',
-        pass: process.env.MAILTRAP_API_TOKEN,
-      },
-      tls: {
-        rejectUnauthorized: false
-      },
+      auth: { user: 'api', pass: process.env.MAILTRAP_API_TOKEN },
+      tls: { rejectUnauthorized: false },
       connectionTimeout: 60000,
       greetingTimeout: 30000,
-      socketTimeout: 60000
-    });
-  } else {
-    return nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'sandbox.smtp.mailtrap.io',
-      port: parseInt(process.env.SMTP_PORT || '2525'),
-      secure: false,
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
+      socketTimeout: 60000,
     });
   }
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'sandbox.smtp.mailtrap.io',
+    port: parseInt(process.env.SMTP_PORT || '2525'),
+    secure: false,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  });
 };
+
+interface SendEmailArgs {
+  to: string;
+  subject: string;
+  html: string;
+  /** Optional display name for the sender; the verified address is preserved. */
+  fromName?: string;
+}
+
+/**
+ * Single entry point for sending email. Uses Resend when configured, otherwise
+ * falls back to SMTP. Throws on hard failures so callers can decide whether to
+ * surface the error.
+ */
+export async function sendEmail({ to, subject, html, fromName }: SendEmailArgs): Promise<void> {
+  const from = senderWithName(fromName);
+  const resend = getResend();
+
+  if (resend) {
+    const { error } = await resend.emails.send({ from, to, subject, html });
+    if (error) {
+      throw new Error(`Resend send failed: ${error.message || JSON.stringify(error)}`);
+    }
+    return;
+  }
+
+  // Fallback: SMTP (Mailtrap). The verified-domain "from" doesn't apply here, so
+  // use the Mailtrap-appropriate sender.
+  const transporter = createSmtpTransporter();
+  const smtpFrom = process.env.MAILTRAP_API_TOKEN
+    ? senderWithName(fromName) // live token can use the configured EMAIL_FROM
+    : `"${fromName || 'Campus ID System'}" <${process.env.SMTP_USER || 'no-reply@campus-id.local'}>`;
+  await transporter.sendMail({ from: smtpFrom, to, subject, html });
+}
 
 // Email service for sending OTP and other notifications
 export async function sendOTPEmail(email: string, code: string, purpose: string): Promise<void> {
   try {
-    const transporter = createTransporter();
-
     const subject = purpose === 'email_verification' 
       ? 'Campus ID - Email Verification Code' 
       : 'Campus ID - Password Reset Code';
@@ -86,16 +139,7 @@ export async function sendOTPEmail(email: string, code: string, purpose: string)
       </div>
     `;
 
-    const fromEmail = process.env.MAILTRAP_API_TOKEN 
-      ? `"Campus ID System" <hello@demomailtrap.com>`
-      : `"Campus ID System" <${process.env.SMTP_USER}>`;
-
-    await transporter.sendMail({
-      from: fromEmail,
-      to: email,
-      subject,
-      html,
-    });
+    await sendEmail({ to: email, subject, html });
 
     console.log(`✅ ${purpose} email sent successfully to ${email}`);
   } catch (error: any) {
@@ -120,8 +164,7 @@ export async function sendStudentActivationEmail(
 ): Promise<void> {
   try {
     const config = getConfig();
-    const transporter = createTransporter();
-    
+
     const activationLink = `${process.env.BACKEND_URL}/api/auth/verify-email?token=${verificationToken}&email=${encodeURIComponent(email)}`;
     const loginUrl = `${process.env.FRONTEND_URL}/login`;
     
@@ -238,11 +281,11 @@ export async function sendStudentActivationEmail(
       </div>
     `;
 
-    await transporter.sendMail({
-      from: `"${institutionName} - Campus ID" <${process.env.SMTP_USER}>`,
+    await sendEmail({
       to: email,
       subject: `Welcome to ${institutionName} - Activate Your Account`,
       html,
+      fromName: `${institutionName} - Campus ID`,
     });
 
     console.log(`✅ Student activation email sent to ${email}`);
@@ -265,8 +308,7 @@ export async function sendLecturerActivationEmail(
 ): Promise<void> {
   try {
     const config = getConfig();
-    const transporter = createTransporter();
-    
+
     const activationLink = `${process.env.BACKEND_URL}/api/auth/verify-email?token=${verificationToken}&email=${encodeURIComponent(email)}`;
     const loginUrl = `${process.env.FRONTEND_URL}/login`;
     
@@ -391,11 +433,11 @@ export async function sendLecturerActivationEmail(
       </div>
     `;
 
-    await transporter.sendMail({
-      from: `"${institutionName} - Campus ID" <${process.env.SMTP_USER}>`,
+    await sendEmail({
       to: email,
       subject: `Welcome to ${institutionName} - Activate Your Lecturer Account`,
       html,
+      fromName: `${institutionName} - Campus ID`,
     });
 
     console.log(`✅ Lecturer activation email sent to ${email}`);
@@ -416,7 +458,6 @@ export async function sendDeadlineReminderEmail(
   hoursLeft: number
 ): Promise<void> {
   try {
-    const transporter = createTransporter();
     const deadlineStr = deadline.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     const urgencyColor = hoursLeft <= 3 ? '#dc3545' : hoursLeft <= 6 ? '#fd7e14' : '#ffc107';
     const urgencyText = hoursLeft <= 3 ? 'URGENT' : hoursLeft <= 6 ? 'Reminder' : 'Heads up';
@@ -446,12 +487,7 @@ export async function sendDeadlineReminderEmail(
       </div>
     `;
 
-    const fromEmail = process.env.MAILTRAP_API_TOKEN
-      ? `"Campus ID System" <hello@demomailtrap.com>`
-      : `"Campus ID System" <${process.env.SMTP_USER}>`;
-
-    await transporter.sendMail({
-      from: fromEmail,
+    await sendEmail({
       to: email,
       subject: `⏰ ${urgencyText}: "${assignmentTitle}" due in ${hoursLeft}h — ${courseCode}`,
       html,
@@ -475,7 +511,6 @@ export async function sendNewAssignmentEmail(
   lecturerName: string
 ): Promise<void> {
   try {
-    const transporter = createTransporter();
     const deadlineStr = deadline.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
     const html = `
@@ -505,71 +540,7 @@ export async function sendNewAssignmentEmail(
       </div>
     `;
 
-    const fromEmail = process.env.MAILTRAP_API_TOKEN
-      ? `"Campus ID System" <hello@demomailtrap.com>`
-      : `"Campus ID System" <${process.env.SMTP_USER}>`;
-
-    await transporter.sendMail({
-      from: fromEmail,
-      to: email,
-      subject: `📝 New Assignment: "${assignmentTitle}" — ${courseCode}`,
-      html,
-    });
-
-    console.log(`✅ New assignment email sent to ${email} for ${assignmentTitle}`);
-  } catch (error: any) {
-    console.error(`❌ Failed to send new assignment email to ${email}:`, error.message);
-  }
-}
-
-
-export async function sendNewAssignmentEmail(
-  email: string,
-  studentName: string,
-  courseCode: string,
-  courseName: string,
-  assignmentTitle: string,
-  description: string,
-  deadline: Date,
-  lecturerName: string
-): Promise<void> {
-  try {
-    const transporter = createTransporter();
-    const deadlineStr = deadline.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="text-align: center; margin-bottom: 30px;">
-          <h1 style="color: #2c3e50; margin: 0;">🎓 Campus ID System</h1>
-        </div>
-        <div style="background: #f8f9fa; padding: 30px; border-radius: 10px; border-left: 4px solid #007bff;">
-          <h2 style="color: #007bff; margin-top: 0;">📝 New Assignment Posted</h2>
-          <p style="color: #555; font-size: 16px; line-height: 1.6;">
-            Hi <strong>${studentName}</strong>, a new assignment has been posted for your course.
-          </p>
-          <div style="background: #ffffff; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #dee2e6;">
-            <table style="width: 100%; border-collapse: collapse;">
-              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Course</td><td style="padding: 8px 0; color: #333; font-weight: bold; font-size: 14px;">${courseCode} — ${courseName}</td></tr>
-              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Assignment</td><td style="padding: 8px 0; color: #333; font-weight: bold; font-size: 14px;">${assignmentTitle}</td></tr>
-              ${description ? `<tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Details</td><td style="padding: 8px 0; color: #555; font-size: 14px;">${description}</td></tr>` : ''}
-              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Deadline</td><td style="padding: 8px 0; color: #dc3545; font-weight: bold; font-size: 14px;">${deadlineStr}</td></tr>
-              <tr><td style="padding: 8px 0; color: #888; font-size: 14px;">Lecturer</td><td style="padding: 8px 0; color: #555; font-size: 14px;">${lecturerName}</td></tr>
-            </table>
-          </div>
-          <p style="color: #555; font-size: 14px;">Log in to your dashboard to view and submit the assignment before the deadline.</p>
-        </div>
-        <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
-          <p style="color: #999; font-size: 12px; margin: 0;">Campus ID System — Secure Student Management Platform</p>
-        </div>
-      </div>
-    `;
-
-    const fromEmail = process.env.MAILTRAP_API_TOKEN
-      ? `"Campus ID System" <hello@demomailtrap.com>`
-      : `"Campus ID System" <${process.env.SMTP_USER}>`;
-
-    await transporter.sendMail({
-      from: fromEmail,
+    await sendEmail({
       to: email,
       subject: `📝 New Assignment: "${assignmentTitle}" — ${courseCode}`,
       html,
