@@ -1,18 +1,34 @@
 import { Hono } from 'hono';
+import crypto from 'crypto';
 import { z } from 'zod';
 import { getInstitutionsCollection } from '../database/connection.js';
 
 const superadmin = new Hono();
 
-// Super Admin API Key middleware (simple protection)
+function timingSafeEqualString(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) {
+    // Compare against self so response time does not leak length differences.
+    crypto.timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+// Super Admin API Key middleware — key must be set in env (no insecure fallback).
 const superAdminAuth = async (c: any, next: any) => {
+  const validKey = process.env.SUPER_ADMIN_KEY;
+  if (!validKey || validKey.length < 16) {
+    console.error('SUPER_ADMIN_KEY is missing or too short — superadmin routes are disabled');
+    return c.json({ error: 'Service unavailable' }, 503);
+  }
+
   const apiKey = c.req.header('X-Super-Admin-Key');
-  const validKey = process.env.SUPER_ADMIN_KEY || 'your-super-secret-key-change-this';
-  
-  if (!apiKey || apiKey !== validKey) {
+  if (!apiKey || !timingSafeEqualString(apiKey, validKey)) {
     return c.json({ error: 'Unauthorized - Invalid super admin key' }, 401);
   }
-  
+
   await next();
 };
 

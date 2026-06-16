@@ -108,7 +108,18 @@ async function createIndexes() {
   await institutionsCol.createIndex({ domain: 1 });
   
   // User indexes
-  await usersCol.createIndex({ email: 1 }, { unique: true });
+  // Email is unique PER INSTITUTION (not globally). The same address may exist
+  // at two different universities, but never twice within the same one — and
+  // it can never be reused across roles inside one institution. If the old
+  // global-unique email index is still present, drop it before creating the
+  // tenant-scoped one.
+  try {
+    await usersCol.dropIndex('email_1');
+    console.log('🔁 Dropped legacy global-unique email index (email_1)');
+  } catch {
+    // Index not present (fresh DB or already migrated) — safe to ignore.
+  }
+  await usersCol.createIndex({ institutionId: 1, email: 1 }, { unique: true });
   await usersCol.createIndex({ institutionId: 1 });
   await usersCol.createIndex({ userType: 1 });
   await usersCol.createIndex({ email: 1, userType: 1 });

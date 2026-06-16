@@ -197,23 +197,25 @@ admin.get('/reports/overview', authMiddleware, async (c) => {
   }
 });
 
+// Emails are unique PER INSTITUTION and across all roles within it. Because the
+// duplicate check is scoped to the admin's own institution, any clash is, by
+// definition, a clash inside their university — so we tell them exactly that
+// and (when known) which role already owns the address.
 function emailExistsResponse(
-  existingUser: { institutionId?: unknown },
-  adminInstitutionId: string,
+  existingUser: { userType?: string },
   accountType: 'student' | 'lecturer',
 ) {
-  const sameInstitution = existingUser.institutionId?.toString() === adminInstitutionId;
-  const label = accountType === 'student' ? 'student' : 'lecturer';
+  const existingRole = existingUser.userType ?? 'user';
   return {
     body: {
-      error: sameInstitution
-        ? `This email is already registered as a ${label} at your institution.`
-        : `This email is already registered with another institution. The same email cannot be used for a ${label} account at your university — please use a different email address.`,
-      code: sameInstitution ? 'EMAIL_EXISTS_SAME_INSTITUTION' : 'EMAIL_EXISTS_OTHER_INSTITUTION',
-      emailInUseElsewhere: !sameInstitution,
+      error: `This email is already in use by ${
+        existingRole === accountType ? `another ${existingRole}` : `a ${existingRole}`
+      } at your institution. Each email can only be used once per institution — please use a different email address.`,
+      code: 'EMAIL_EXISTS_SAME_INSTITUTION',
+      field: 'email',
       accountType,
     },
-    status: sameInstitution ? 400 as const : 409 as const,
+    status: 400 as const,
   };
 }
 
@@ -252,6 +254,47 @@ function generateLecturerId(institutionCode: string): string {
   return `${institutionCode}-LEC-${timestamp}${random}`;
 }
 
+// Live email-availability check (Admin only) — lets the create-user form warn
+// before submit. Scoped to the admin's institution, since emails are unique
+// per-institution and across all roles within it.
+admin.get('/check-email', authMiddleware, async (c) => {
+  try {
+    const authUser = c.get('user');
+    if (authUser.userType !== 'admin') {
+      return c.json({ error: 'Access denied. Admin privileges required.' }, 403);
+    }
+
+    const raw = (c.req.query('email') || '').trim();
+    const email = sanitizeEmail(raw);
+    // Basic shape check; the form does full validation, this is just a guard.
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return c.json({ available: false, valid: false });
+    }
+
+    const usersCollection = getUsersCollection();
+    const existing = await usersCollection.findOne({
+      institutionId: new ObjectId(authUser.institutionId),
+      email: { $regex: new RegExp(`^${escapeRegex(email)}$`, 'i') },
+    });
+
+    if (existing) {
+      return c.json({
+        available: false,
+        valid: true,
+        existingRole: existing.userType,
+        message: `Already in use by ${
+          existing.userType ? `a ${existing.userType}` : 'another account'
+        } at your institution.`,
+      });
+    }
+
+    return c.json({ available: true, valid: true });
+  } catch (error: any) {
+    console.error('Check email error:', error.message);
+    return c.json({ error: 'Failed to check email' }, 500);
+  }
+});
+
 // Create student account (Admin only)
 admin.post('/students', authMiddleware, async (c) => {
   try {
@@ -278,13 +321,15 @@ admin.post('/students', authMiddleware, async (c) => {
     const usersCollection = getUsersCollection();
     const otpCollection = getOTPCollection();
 
-    // Check if email already exists (case-insensitive) and tell the admin
-    // whether the clash is at their own institution or another one.
+    // Check if email already exists WITHIN this institution (case-insensitive,
+    // across every role). Emails are unique per-institution, so the same
+    // address can still belong to a different university.
     const existingUser = await usersCollection.findOne({
+      institutionId: new ObjectId(authUser.institutionId),
       email: { $regex: new RegExp(`^${escapeRegex(sanitizedData.email)}$`, 'i') },
     });
     if (existingUser) {
-      const { body, status } = emailExistsResponse(existingUser, authUser.institutionId, 'student');
+      const { body, status } = emailExistsResponse(existingUser, 'student');
       return c.json(body, status);
     }
 
@@ -305,8 +350,8 @@ admin.post('/students', authMiddleware, async (c) => {
 
     const studentId = generateStudentId(institution.code);
     
-    // Generate default password: firstName123 (lowercase)
-    const defaultPassword = `${sanitizedData.firstName.toLowerCase()}123`;
+    // Random temporary password — user must change on first login.
+    const defaultPassword = AuthService.generateTemporaryPassword();
     const passwordHash = await AuthService.hashPassword(defaultPassword);
 
     // Generate verification token (cryptographically secure)
@@ -434,13 +479,15 @@ admin.post('/lecturers', authMiddleware, async (c) => {
     const usersCollection = getUsersCollection();
     const otpCollection = getOTPCollection();
 
-    // Check if email already exists (case-insensitive) and tell the admin
-    // whether the clash is at their own institution or another one.
+    // Check if email already exists WITHIN this institution (case-insensitive,
+    // across every role). Emails are unique per-institution, so the same
+    // address can still belong to a different university.
     const existingUser = await usersCollection.findOne({
+      institutionId: new ObjectId(authUser.institutionId),
       email: { $regex: new RegExp(`^${escapeRegex(sanitizedData.email)}$`, 'i') },
     });
     if (existingUser) {
-      const { body, status } = emailExistsResponse(existingUser, authUser.institutionId, 'lecturer');
+      const { body, status } = emailExistsResponse(existingUser, 'lecturer');
       return c.json(body, status);
     }
 
@@ -461,8 +508,8 @@ admin.post('/lecturers', authMiddleware, async (c) => {
 
     const lecturerId = generateLecturerId(institution.code);
     
-    // Generate default password: firstName123 (lowercase)
-    const defaultPassword = `${sanitizedData.firstName.toLowerCase()}123`;
+    // Random temporary password — user must change on first login.
+    const defaultPassword = AuthService.generateTemporaryPassword();
     const passwordHash = await AuthService.hashPassword(defaultPassword);
 
     // Generate verification token (cryptographically secure)

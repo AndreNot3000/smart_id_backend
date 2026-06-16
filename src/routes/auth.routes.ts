@@ -4,6 +4,7 @@ import { ObjectId } from 'mongodb';
 import { getInstitutionsCollection, getUsersCollection, getOTPCollection } from '../database/connection.js';
 import { AuthService } from '../services/auth.services.js';
 import type { UserType } from '../models/user.model.js';
+import { loginRateLimiter } from '../middleware/rateLimit.middleware.js';
 
 const auth = new Hono();
 
@@ -24,6 +25,10 @@ const loginSchema = z.object({
   email: z.string().min(1, 'Email or Student ID is required'), // Changed to accept both
   password: z.string().min(1, 'Password is required'),
   userType: z.enum(['student', 'lecturer', 'admin']),
+  // Required when signing in with an email, because emails are unique only
+  // within an institution. Optional for ID logins (student/lecturer IDs embed
+  // the institution and are globally unique).
+  institutionCode: z.string().min(3).max(20).optional(),
 });
 
 const verifyOTPSchema = z.object({
@@ -70,38 +75,8 @@ auth.get('/institutions', async (c) => {
   }
 });
 
-// Debug endpoint to check OTP records (remove in production)
-auth.get('/debug/otp/:email', async (c) => {
-  try {
-    const email = c.req.param('email');
-    const otpCollection = getOTPCollection();
-    
-    const records = await otpCollection
-      .find({ email: decodeURIComponent(email) })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .toArray();
-
-    return c.json({
-      email: decodeURIComponent(email),
-      records: records.map(record => ({
-        id: record._id,
-        code: record.code,
-        purpose: record.purpose,
-        used: record.used,
-        expiresAt: record.expiresAt,
-        isExpired: record.expiresAt <= new Date(),
-        createdAt: record.createdAt
-      }))
-    });
-  } catch (error) {
-    console.error('Debug OTP error:', error);
-    return c.json({ error: 'Failed to fetch OTP records' }, 500);
-  }
-});
-
 // Admin Registration endpoint (Admin account creation for existing institution)
-auth.post('/admin/register', async (c) => {
+auth.post('/admin/register', loginRateLimiter, async (c) => {
   try {
     const body = await c.req.json();
     const data = adminRegisterSchema.parse(body);
@@ -133,12 +108,16 @@ auth.post('/admin/register', async (c) => {
       }, 400);
     }
 
-    // Check if admin email already exists (case-insensitive)
+    // Check if this email is already used WITHIN this institution (any role).
+    // Emails are unique per-institution, so the same address can still be
+    // registered at a different university.
+    const escapedEmail = data.adminEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const existingUser = await usersCollection.findOne({ 
-      email: { $regex: new RegExp(`^${data.adminEmail}$`, 'i') }
+      institutionId: institution._id,
+      email: { $regex: new RegExp(`^${escapedEmail}$`, 'i') }
     });
     if (existingUser) {
-      return c.json({ error: 'Email already registered' }, 400);
+      return c.json({ error: 'This email is already registered at this institution.' }, 400);
     }
 
     // Hash password
@@ -192,7 +171,7 @@ auth.post('/admin/register', async (c) => {
 });
 
 // Login endpoint
-auth.post('/login', async (c) => {
+auth.post('/login', loginRateLimiter, async (c) => {
   try {
     console.log('🔍 Login attempt started');
     const body = await c.req.json();
@@ -202,36 +181,60 @@ auth.post('/login', async (c) => {
     console.log('✅ Validation passed');
 
     const usersCollection = getUsersCollection();
+    const institutionsCollection = getInstitutionsCollection();
     console.log('📊 Database connection obtained');
 
     // Normalize email for search (trim and lowercase)
     const normalizedEmail = data.email.toLowerCase().trim();
+    const isEmailLogin = normalizedEmail.includes('@');
+
+    // Resolve the institution when a code is supplied. Emails are unique only
+    // within an institution, so an email login MUST be scoped to one. ID logins
+    // (student/lecturer IDs) are globally unique, so the code is optional there.
+    let institutionId: ObjectId | undefined;
+    if (data.institutionCode) {
+      const inst = await institutionsCollection.findOne({
+        code: data.institutionCode.toUpperCase(),
+      });
+      if (!inst) {
+        return c.json({ error: 'Institution not found. Please check your selection.' }, 404);
+      }
+      institutionId = inst._id;
+    }
+
+    if (isEmailLogin && !institutionId) {
+      return c.json(
+        { error: 'Please select your institution to sign in with an email address.' },
+        400,
+      );
+    }
 
     // Find user by email OR student ID (for students) OR lecturer ID (for lecturers)
     let user;
     
     if (data.userType === 'student') {
-      // For students, check both email and studentId (case-insensitive)
+      // For students, check both email (scoped to institution) and studentId.
       user = await usersCollection.findOne({ 
         $or: [
-          { email: normalizedEmail, userType: 'student' },
+          { email: normalizedEmail, userType: 'student', institutionId },
           { 'profile.studentId': data.email, userType: 'student' }
         ]
       });
     } else if (data.userType === 'lecturer') {
-      // For lecturers, check both email and lecturerId (case-insensitive)
+      // For lecturers, check both email (scoped) and lecturerId.
       user = await usersCollection.findOne({ 
         $or: [
-          { email: normalizedEmail, userType: 'lecturer' },
+          { email: normalizedEmail, userType: 'lecturer', institutionId },
           { 'profile.lecturerId': data.email, userType: 'lecturer' }
         ]
       });
     } else {
-      // For admins, only check email (case-insensitive)
+      // For admins, only check email (case-insensitive), scoped to institution.
       console.log('🔍 Searching for admin user:', { email: normalizedEmail, userType: data.userType });
       user = await usersCollection.findOne({ 
         email: normalizedEmail,
-        userType: data.userType 
+        userType: data.userType,
+        institutionId,
       });
     }
 
@@ -251,8 +254,7 @@ auth.post('/login', async (c) => {
       return c.json({ error: 'Invalid credentials' }, 401);
     }
 
-    // Get institution details
-    const institutionsCollection = getInstitutionsCollection();
+    // Get institution details (for the response payload)
     const institution = await institutionsCollection.findOne({ _id: user.institutionId });
     console.log('🏫 Institution found:', institution ? institution.name : 'No');
 
@@ -493,7 +495,7 @@ auth.get('/verify-email', async (c) => {
 });
 
 // Verify OTP endpoint (kept for admin/lecturer registration)
-auth.post('/verify-otp', async (c) => {
+auth.post('/verify-otp', loginRateLimiter, async (c) => {
   try {
     const body = await c.req.json();
     const data = verifyOTPSchema.parse(body);
@@ -535,7 +537,7 @@ auth.post('/verify-otp', async (c) => {
 });
 
 // Resend OTP endpoint
-auth.post('/resend-otp', async (c) => {
+auth.post('/resend-otp', loginRateLimiter, async (c) => {
   try {
     const { email } = await c.req.json();
     
@@ -595,7 +597,7 @@ auth.post('/refresh-token', async (c) => {
 });
 
 // Forgot Password - Request OTP
-auth.post('/forgot-password', async (c) => {
+auth.post('/forgot-password', loginRateLimiter, async (c) => {
   try {
     const body = await c.req.json();
     const data = forgotPasswordSchema.parse(body);
@@ -639,7 +641,7 @@ auth.post('/forgot-password', async (c) => {
 });
 
 // Reset Password - Verify OTP and Set New Password
-auth.post('/reset-password', async (c) => {
+auth.post('/reset-password', loginRateLimiter, async (c) => {
   try {
     const body = await c.req.json();
     const data = resetPasswordSchema.parse(body);

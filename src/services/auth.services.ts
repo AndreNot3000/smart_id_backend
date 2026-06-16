@@ -35,17 +35,19 @@ export class AuthService {
     };
 
     const accessToken = jwt.sign(payload, secret, { 
-      expiresIn: APP_CONSTANTS.TOKEN.ACCESS_TOKEN_EXPIRY 
+      expiresIn: APP_CONSTANTS.TOKEN.ACCESS_TOKEN_EXPIRY,
+      algorithm: 'HS256',
     });
     const refreshToken = jwt.sign({ userId }, refreshSecret, { 
-      expiresIn: APP_CONSTANTS.TOKEN.REFRESH_TOKEN_EXPIRY 
+      expiresIn: APP_CONSTANTS.TOKEN.REFRESH_TOKEN_EXPIRY,
+      algorithm: 'HS256',
     });
 
     return { accessToken, refreshToken };
   }
 
   static async generateOTP(email: string, purpose: string): Promise<string> {
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const code = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + APP_CONSTANTS.OTP.EXPIRY);
 
     const otpCollection = getOTPCollection();
@@ -99,7 +101,7 @@ export class AuthService {
   static verifyToken(token: string): any {
     try {
       const secret = process.env.JWT_SECRET!;
-      return jwt.verify(token, secret);
+      return jwt.verify(token, secret, { algorithms: ['HS256'] });
     } catch (error) {
       throw new Error('Invalid token');
     }
@@ -108,10 +110,28 @@ export class AuthService {
   static verifyRefreshToken(token: string): any {
     try {
       const refreshSecret = process.env.JWT_REFRESH_SECRET!;
-      return jwt.verify(token, refreshSecret);
+      return jwt.verify(token, refreshSecret, { algorithms: ['HS256'] });
     } catch (error) {
       throw new Error('Invalid refresh token');
     }
+  }
+
+  /**
+   * Generate a random temporary password for newly created accounts.
+   * Users are forced to change it on first login (isFirstLogin flag).
+   */
+  static generateTemporaryPassword(length: number = 12): string {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$';
+    const bytes = crypto.randomBytes(length);
+    let password = '';
+    for (let i = 0; i < length; i++) {
+      password += alphabet[bytes[i]! % alphabet.length];
+    }
+    // Guarantee at least one letter, digit, and symbol for policy compliance.
+    if (!/[a-zA-Z]/.test(password)) password += 'a';
+    if (!/\d/.test(password)) password += '7';
+    if (!/[!@#$]/.test(password)) password += '!';
+    return password;
   }
 
   /**
