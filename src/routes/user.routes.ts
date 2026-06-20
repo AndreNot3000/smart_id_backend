@@ -2,8 +2,9 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { ObjectId } from 'mongodb';
 import { getUsersCollection, getInstitutionsCollection } from '../database/connection.js';
-import { authMiddleware } from '../middleware/auth.middleware.js';
+import { authMiddleware, invalidateAuthCache } from '../middleware/auth.middleware.js';
 import { AuthService } from '../services/auth.services.js';
+import { writeAuditEvent, actorFromAuthUser } from '../services/audit-log.service.js';
 
 const user = new Hono();
 
@@ -103,6 +104,7 @@ user.get('/profile', authMiddleware, async (c) => {
       email: userDoc.email,
       userType: userDoc.userType,
       status: userDoc.status,
+      mfaEnabled: userDoc.userType === 'admin' ? Boolean((userDoc as any).mfaEnabled) : undefined,
       profile: {
         ...userDoc.profile,
         universityName: institution?.name || 'Unknown University'
@@ -124,9 +126,10 @@ user.put('/profile', authMiddleware, async (c) => {
     const body = await c.req.json();
     const { firstName, lastName, phone, address, dateOfBirth, department, year, title, specialization } = body;
 
-    const updateData: any = {
+    const updateData: Record<string, unknown> = {
       updatedAt: new Date()
     };
+    const unsetFields: Record<string, ''> = {};
 
     // Build profile update object
     if (firstName) updateData['profile.firstName'] = firstName;
@@ -136,12 +139,18 @@ user.put('/profile', authMiddleware, async (c) => {
     if (dateOfBirth) updateData['profile.dateOfBirth'] = new Date(dateOfBirth);
     if (department !== undefined) updateData['profile.department'] = department;
     if (year !== undefined) updateData['profile.year'] = year;
-    if (title !== undefined) updateData['profile.title'] = title;
+    if (title !== undefined) {
+      updateData['profile.title'] = title;
+      unsetFields['profile.role'] = '';
+    }
     if (specialization !== undefined) updateData['profile.specialization'] = specialization;
 
     const result = await usersCollection.findOneAndUpdate(
       { _id: userId },
-      { $set: updateData },
+      {
+        $set: updateData,
+        ...(Object.keys(unsetFields).length ? { $unset: unsetFields } : {}),
+      },
       { returnDocument: 'after', projection: { passwordHash: 0, passwordHistory: 0 } }
     );
 
@@ -281,7 +290,10 @@ user.put('/change-password', authMiddleware, async (c) => {
       ...(userData.passwordHistory || [])
     ].slice(0, 5);
 
-    // Update password
+    // Update password and bump tokenVersion to invalidate all *other* existing
+    // sessions (other devices/tabs). We then re-issue tokens for THIS request so
+    // the current session continues seamlessly.
+    const nextVersion = (userData.tokenVersion ?? 0) + 1;
     await usersCollection.updateOne(
       { _id: new ObjectId(authUser.userId) },
       { 
@@ -289,12 +301,25 @@ user.put('/change-password', authMiddleware, async (c) => {
           passwordHash: newPasswordHash,
           passwordHistory: updatedPasswordHistory,
           isFirstLogin: false, // Clear first login flag
+          tokenVersion: nextVersion,
           updatedAt: new Date()
-        } 
+        },
+        $unset: { refreshTokenId: '' },
       }
     );
 
-    return c.json({ message: 'Password changed successfully' });
+    // Drop the cached entry so the new version takes effect immediately.
+    invalidateAuthCache(authUser.userId);
+
+    const tokens = await AuthService.issueSessionTokens(
+      userData._id.toString(),
+      userData.userType,
+      userData.institutionId.toString(),
+      userData.email,
+      nextVersion
+    );
+
+    return c.json({ message: 'Password changed successfully', ...tokens });
 
   } catch (error) {
     console.error('Change password error:', error);
@@ -311,13 +336,23 @@ user.put('/change-password', authMiddleware, async (c) => {
   }
 });
 
-// Logout (invalidate token - client-side mainly)
+// Logout — bumps tokenVersion so the issued access/refresh tokens are rejected
+// server-side from now on (across every device/tab), not just cleared client-side.
 user.post('/logout', authMiddleware, async (c) => {
   try {
-    // In a JWT system, logout is mainly handled client-side by removing tokens
-    // But we can log the logout event for security/audit purposes
-    
     const authUser = c.get('user');
+    const usersCollection = getUsersCollection();
+
+    await usersCollection.updateOne(
+      { _id: new ObjectId(authUser.userId) },
+      {
+        $inc: { tokenVersion: 1 },
+        $unset: { refreshTokenId: '' },
+        $set: { updatedAt: new Date() },
+      }
+    );
+    invalidateAuthCache(authUser.userId);
+
     console.log(`User ${authUser.email} (${authUser.userType}) logged out at ${new Date().toISOString()}`);
 
     return c.json({ 
@@ -328,6 +363,164 @@ user.post('/logout', authMiddleware, async (c) => {
   } catch (error) {
     console.error('Logout error:', error);
     return c.json({ error: 'Logout failed' }, 500);
+  }
+});
+
+// ---- MFA (admins) ----
+
+user.post('/mfa/setup', authMiddleware, async (c) => {
+  try {
+    const authUser = c.get('user');
+    if (authUser.userType !== 'admin') {
+      return c.json({ error: 'Access denied. Admin privileges required.' }, 403);
+    }
+
+    const usersCollection = getUsersCollection();
+    const userDoc = await usersCollection.findOne({ _id: new ObjectId(authUser.userId) });
+    if (!userDoc) return c.json({ error: 'User not found' }, 404);
+
+    const secret = AuthService.generateMfaSecret();
+    const enc = AuthService.encryptMfaSecret(secret);
+
+    await usersCollection.updateOne(
+      { _id: userDoc._id },
+      { $set: { mfaPendingSecretEnc: enc, mfaPendingCreatedAt: new Date(), updatedAt: new Date() } },
+    );
+
+    const issuer = 'Campus ID';
+    const label = encodeURIComponent(`${issuer}:${userDoc.email}`);
+    const params = new URLSearchParams({
+      secret,
+      issuer,
+      algorithm: 'SHA1',
+      digits: '6',
+      period: '30',
+    });
+    const otpauthUrl = `otpauth://totp/${label}?${params.toString()}`;
+
+    writeAuditEvent({
+      institutionId: userDoc.institutionId,
+      action: 'mfa.setup.started',
+      actor: actorFromAuthUser(authUser, c.req.raw),
+      target: { type: 'user', id: userDoc._id.toString(), email: userDoc.email },
+      outcome: 'success',
+    });
+
+    return c.json({ otpauthUrl, secret });
+  } catch (error: any) {
+    console.error('MFA setup error:', error);
+    return c.json({ error: 'Failed to start MFA setup' }, 500);
+  }
+});
+
+user.post('/mfa/confirm', authMiddleware, async (c) => {
+  try {
+    const authUser = c.get('user');
+    if (authUser.userType !== 'admin') {
+      return c.json({ error: 'Access denied. Admin privileges required.' }, 403);
+    }
+
+    const body = await c.req.json();
+    const code = String(body?.code || '').trim();
+    if (!/^\d{6}$/.test(code)) return c.json({ error: 'Invalid code' }, 400);
+
+    const usersCollection = getUsersCollection();
+    const userDoc = await usersCollection.findOne({ _id: new ObjectId(authUser.userId) });
+    if (!userDoc) return c.json({ error: 'User not found' }, 404);
+    if (!(userDoc as any).mfaPendingSecretEnc) return c.json({ error: 'No MFA setup in progress' }, 400);
+
+    const secret = AuthService.decryptMfaSecret((userDoc as any).mfaPendingSecretEnc);
+    const ok = AuthService.verifyTotp(secret, code);
+    if (!ok) return c.json({ error: 'Invalid authentication code' }, 401);
+
+    const backupCodes = AuthService.generateBackupCodes(10);
+    const hashed = await AuthService.hashBackupCodes(backupCodes);
+
+    await usersCollection.updateOne(
+      { _id: userDoc._id },
+      {
+        $set: {
+          mfaEnabled: true,
+          mfaSecretEnc: AuthService.encryptMfaSecret(secret),
+          mfaBackupCodesHash: hashed,
+          updatedAt: new Date(),
+        },
+        $unset: { mfaPendingSecretEnc: '', mfaPendingCreatedAt: '' },
+      },
+    );
+
+    writeAuditEvent({
+      institutionId: userDoc.institutionId,
+      action: 'mfa.enabled',
+      actor: actorFromAuthUser(authUser, c.req.raw),
+      target: { type: 'user', id: userDoc._id.toString(), email: userDoc.email },
+      outcome: 'success',
+    });
+
+    return c.json({ message: 'MFA enabled', backupCodes });
+  } catch (error: any) {
+    console.error('MFA confirm error:', error);
+    return c.json({ error: 'Failed to confirm MFA' }, 500);
+  }
+});
+
+user.post('/mfa/disable', authMiddleware, async (c) => {
+  try {
+    const authUser = c.get('user');
+    if (authUser.userType !== 'admin') {
+      return c.json({ error: 'Access denied. Admin privileges required.' }, 403);
+    }
+
+    const body = await c.req.json();
+    const code = String(body?.code || '').trim();
+    const currentPassword = String(body?.password || '');
+
+    const usersCollection = getUsersCollection();
+    const userDoc = await usersCollection.findOne({ _id: new ObjectId(authUser.userId) });
+    if (!userDoc) return c.json({ error: 'User not found' }, 404);
+
+    const pwOk = await AuthService.verifyPassword(currentPassword, userDoc.passwordHash);
+    if (!pwOk) return c.json({ error: 'Invalid password' }, 401);
+
+    if (!(userDoc as any).mfaEnabled) return c.json({ error: 'MFA is not enabled' }, 400);
+
+    const secretEnc = (userDoc as any).mfaSecretEnc as string | undefined;
+    const secret = secretEnc ? AuthService.decryptMfaSecret(secretEnc) : '';
+    const isTotp = secret ? AuthService.verifyTotp(secret, code) : false;
+
+    let usedBackup = false;
+    if (!isTotp && Array.isArray((userDoc as any).mfaBackupCodesHash)) {
+      for (const h of (userDoc as any).mfaBackupCodesHash as string[]) {
+        const ok = await AuthService.verifyPassword(code, h);
+        if (ok) {
+          usedBackup = true;
+          break;
+        }
+      }
+    }
+
+    if (!isTotp && !usedBackup) return c.json({ error: 'Invalid authentication code' }, 401);
+
+    await usersCollection.updateOne(
+      { _id: userDoc._id },
+      {
+        $set: { mfaEnabled: false, updatedAt: new Date() },
+        $unset: { mfaSecretEnc: '', mfaBackupCodesHash: '' },
+      },
+    );
+
+    writeAuditEvent({
+      institutionId: userDoc.institutionId,
+      action: 'mfa.disabled',
+      actor: actorFromAuthUser(authUser, c.req.raw),
+      target: { type: 'user', id: userDoc._id.toString(), email: userDoc.email },
+      outcome: 'success',
+    });
+
+    return c.json({ message: 'MFA disabled' });
+  } catch (error: any) {
+    console.error('MFA disable error:', error);
+    return c.json({ error: 'Failed to disable MFA' }, 500);
   }
 });
 

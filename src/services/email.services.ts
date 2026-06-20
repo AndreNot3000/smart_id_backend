@@ -303,7 +303,7 @@ export async function sendLecturerActivationEmail(
   defaultPassword: string, 
   verificationToken: string,
   institutionName: string,
-  role: string,
+  title: string,
   department: string
 ): Promise<void> {
   try {
@@ -335,7 +335,7 @@ export async function sendLecturerActivationEmail(
         
         <!-- Welcome Message -->
         <div style="background: white; padding: 30px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-          <h2 style="color: #2c3e50; margin-top: 0;">Welcome ${role} ${firstName} ${lastName}!</h2>
+          <h2 style="color: #2c3e50; margin-top: 0;">Welcome ${title} ${firstName} ${lastName}!</h2>
           <p style="color: #555; font-size: 16px; line-height: 1.6;">
             Your lecturer account has been created successfully. Please find your login credentials below and activate your account.
           </p>
@@ -355,7 +355,7 @@ export async function sendLecturerActivationEmail(
             </div>
             <div style="margin-bottom: 10px;">
               <strong style="color: #333;">Role:</strong> 
-              <span style="color: #28a745; font-weight: bold;">${role}</span>
+              <span style="color: #28a745; font-weight: bold;">${title}</span>
             </div>
             <div style="margin-bottom: 10px;">
               <strong style="color: #333;">Department:</strong> 

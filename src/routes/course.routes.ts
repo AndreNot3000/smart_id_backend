@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { ObjectId } from 'mongodb';
 import { authMiddleware } from '../middleware/auth.middleware.js';
-import { getDatabase, getEnrollmentsCollection } from '../database/connection.js';
+import { getDatabase, getEnrollmentsCollection, getInstitutionsCollection } from '../database/connection.js';
 import { sendNewAssignmentEmail } from '../services/email.services.js';
-import { DEFAULT_GRADE_SCALE, isValidScale, percentageToGrade, classifyCgpa, type GradeScale } from '../utils/gpa.js';
+import { resolveGradeScale, percentageToGrade, classifyCgpa } from '../utils/gpa.js';
 import { computeFinalPercentage, validateComponents, type AssessmentComponent } from '../utils/gradebook.js';
+import { formatLecturerName } from '../utils/profile.js';
 
 const course = new Hono();
 
@@ -535,6 +536,27 @@ course.get('/student/feed', authMiddleware, async (c) => {
   }
 });
 
+// GET /course/student/grade-scale - institution grading rules (read-only for students).
+course.get('/student/grade-scale', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    if (user.userType !== 'student') {
+      return c.json({ error: 'Only students can access this endpoint' }, 403);
+    }
+    const institution = await getInstitutionsCollection().findOne({ _id: new ObjectId(user.institutionId) });
+    const scale = resolveGradeScale(institution);
+    return c.json({
+      gradeScale: scale,
+      scaleMax: scale.scaleMax,
+      isCustom: !!(institution as any)?.gradeScale,
+      serverTime: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('Error fetching student grade scale:', error);
+    return c.json({ error: 'Failed to fetch grading scale', details: error.message }, 500);
+  }
+});
+
 // GET /course/student/gpa - Live, auto-computed CGPA for the logged-in student.
 // Derived from graded submissions + course credits. Nobody uploads this value;
 // it is recomputed from the current database on every request, so it always
@@ -548,17 +570,18 @@ course.get('/student/gpa', authMiddleware, async (c) => {
     }
 
     const db = getDatabase();
-    const student = await db.collection('users').findOne({ email: user.email });
+    const student = await db.collection('users').findOne({
+      _id: new ObjectId(user.userId),
+      institutionId: new ObjectId(user.institutionId),
+      userType: 'student',
+    });
     if (!student?.profile?.department || !student?.profile?.year) {
       return c.json({ error: 'Student profile incomplete' }, 404);
     }
 
-    // Grading scale: per-institution override, else the default.
-    let scale: GradeScale = DEFAULT_GRADE_SCALE;
-    try {
-      const inst = await db.collection('institutions').findOne({ _id: student.institutionId });
-      if (inst && isValidScale((inst as any).gradeScale)) scale = (inst as any).gradeScale;
-    } catch { /* fall back to default */ }
+    const institutionsCollection = getInstitutionsCollection();
+    const institution = await institutionsCollection.findOne({ _id: new ObjectId(user.institutionId) });
+    const scale = resolveGradeScale(institution);
 
     const courses = await db.collection('courses').find({
       institutionId: user.institutionId,
@@ -568,7 +591,17 @@ course.get('/student/gpa', authMiddleware, async (c) => {
     }).toArray();
 
     if (courses.length === 0) {
-      return c.json({ cgpa: null, scaleMax: scale.scaleMax, creditsEarned: 0, totalCredits: 0, label: '', completed: [], inProgress: [], serverTime: new Date().toISOString() });
+      return c.json({
+        cgpa: null,
+        scaleMax: scale.scaleMax,
+        gradeScale: scale,
+        creditsEarned: 0,
+        totalCredits: 0,
+        label: '',
+        completed: [],
+        inProgress: [],
+        serverTime: new Date().toISOString(),
+      });
     }
 
     const courseIds = courses.map((co: any) => co._id.toString());
@@ -640,6 +673,7 @@ course.get('/student/gpa', authMiddleware, async (c) => {
     return c.json({
       cgpa,
       scaleMax: scale.scaleMax,
+      gradeScale: scale,
       creditsEarned: earnedCredits,
       totalCredits: courses.reduce((sum: number, co: any) => sum + (co.credits || 0), 0),
       label: cgpa != null ? classifyCgpa(cgpa, scale.scaleMax) : '',
@@ -730,11 +764,8 @@ course.get('/:id/gradebook', authMiddleware, async (c) => {
     const db = getDatabase();
 
     // Grading scale (institution override or default)
-    let scale: GradeScale = DEFAULT_GRADE_SCALE;
-    try {
-      const inst = await db.collection('institutions').findOne({ _id: new ObjectId(course.institutionId) });
-      if (inst && isValidScale((inst as any).gradeScale)) scale = (inst as any).gradeScale;
-    } catch { /* default */ }
+    const institution = await getInstitutionsCollection().findOne({ _id: new ObjectId(course.institutionId) });
+    const scale = resolveGradeScale(institution);
 
     const scheme = await db.collection('assessment_schemes').findOne({ courseId });
     const components: AssessmentComponent[] = (scheme as any)?.components || [];
@@ -1086,7 +1117,7 @@ course.post('/:id/material', authMiddleware, async (c) => {
     const courseDoc = await db.collection('courses').findOne({ _id: new ObjectId(courseId), institutionId: user.institutionId });
     if (!courseDoc) return c.json({ error: 'Course not found' }, 404);
 
-    const lecturerName = `${lecturer.profile?.role || ''} ${lecturer.profile?.firstName} ${lecturer.profile?.lastName}`.trim();
+    const lecturerName = formatLecturerName(lecturer.profile);
 
     const material = {
       courseId,
@@ -1210,7 +1241,7 @@ course.post('/:id/announcement', authMiddleware, async (c) => {
     const entry = {
       courseId, courseCode: (courseDoc as any).courseCode,
       message: message.trim(),
-      lecturerName: `${lecturer.profile?.role || ''} ${lecturer.profile?.firstName} ${lecturer.profile?.lastName}`.trim(),
+      lecturerName: formatLecturerName(lecturer.profile),
       lecturerId: lecturer._id.toString(),
       institutionId: user.institutionId,
       createdAt: new Date()
@@ -1283,7 +1314,7 @@ course.post('/:id/assignment', authMiddleware, async (c) => {
       title: title.trim(), description: (description || '').trim(),
       deadline: new Date(deadline),
       lecturerId: lecturer._id.toString(),
-      lecturerName: `${lecturer.profile?.role || ''} ${lecturer.profile?.firstName} ${lecturer.profile?.lastName}`.trim(),
+      lecturerName: formatLecturerName(lecturer.profile),
       institutionId: user.institutionId,
       department: (courseDoc as any).department,
       level: (courseDoc as any).level,

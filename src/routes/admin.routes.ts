@@ -1,14 +1,17 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { z } from 'zod';
 import { ObjectId } from 'mongodb';
-import { getUsersCollection, getOTPCollection } from '../database/connection.js';
-import { authMiddleware } from '../middleware/auth.middleware.js';
+import { getUsersCollection, getOTPCollection, getDatabase, getEnrollmentsCollection, getAttendanceCollection } from '../database/connection.js';
+import { authMiddleware, invalidateAuthCache } from '../middleware/auth.middleware.js';
 import { AuthService } from '../services/auth.services.js';
 import { sendStudentActivationEmail, sendLecturerActivationEmail } from '../services/email.services.js';
 import { APP_CONSTANTS, getConfig } from '../config/constants.js';
 import { sanitizeEmail, sanitizeString } from '../utils/sanitize.js';
 import { getInstitutionsCollection } from '../database/connection.js';
 import { DEFAULT_GRADE_SCALE, isValidScale, type GradeScale } from '../utils/gpa.js';
+import { getLecturerTitle } from '../utils/profile.js';
+import { actorFromAuthUser, targetUser, writeAuditEvent } from '../services/audit-log.service.js';
 
 const admin = new Hono();
 
@@ -74,8 +77,27 @@ admin.put('/grade-scale', authMiddleware, async (c) => {
     );
     if (result.matchedCount === 0) return c.json({ error: 'Institution not found' }, 404);
 
+    writeAuditEvent({
+      institutionId: new ObjectId(authUser.institutionId),
+      action: 'institution.grade_scale.updated',
+      actor: actorFromAuthUser(authUser, c.req.raw),
+      target: { type: 'institution', id: String(authUser.institutionId) },
+      outcome: 'success',
+      metadata: { gradeScale: clean },
+    });
+
     return c.json({ message: 'Grading scale saved', gradeScale: clean });
   } catch (error: any) {
+    try {
+      const authUser = c.get('user');
+      writeAuditEvent({
+        institutionId: authUser?.institutionId ? new ObjectId(authUser.institutionId) : undefined,
+        action: 'institution.grade_scale.updated',
+        actor: actorFromAuthUser(authUser, c.req.raw),
+        outcome: 'failure',
+        errorMessage: error?.message || 'unknown error',
+      });
+    } catch {}
     return c.json({ error: 'Failed to save grade scale', details: error.message }, 500);
   }
 });
@@ -219,6 +241,42 @@ function emailExistsResponse(
   };
 }
 
+/** Pending account that never finished email activation — safe to re-issue credentials. */
+function canReissuePendingActivation(
+  existingUser: { userType?: string; status?: string; emailVerified?: boolean },
+  accountType: 'student' | 'lecturer',
+): boolean {
+  return (
+    existingUser.userType === accountType &&
+    existingUser.status === 'pending' &&
+    existingUser.emailVerified !== true
+  );
+}
+
+async function storeActivationOtp(
+  otpCollection: ReturnType<typeof getOTPCollection>,
+  email: string,
+  institutionId: ObjectId,
+  verificationToken: string,
+) {
+  const tokenExpiresAt = new Date(Date.now() + APP_CONSTANTS.TOKEN.VERIFICATION_TOKEN_EXPIRY);
+  // Drop stale / used codes so a fresh link is the only active one.
+  await otpCollection.updateMany(
+    { email, institutionId, purpose: 'email_verification' },
+    { $set: { used: true } },
+  );
+  await otpCollection.insertOne({
+    email,
+    institutionId,
+    code: verificationToken,
+    purpose: 'email_verification',
+    expiresAt: tokenExpiresAt,
+    used: false,
+    createdAt: new Date(),
+  });
+  return tokenExpiresAt;
+}
+
 // Validation schema for creating student
 const createStudentSchema = z.object({
   firstName: z.string().min(1, 'First name is required'),
@@ -234,8 +292,8 @@ const createLecturerSchema = z.object({
   lastName: z.string().min(1, 'Last name is required'),
   email: z.string().email('Invalid email address'),
   department: z.string().min(1, 'Department is required'),
-  role: z.enum(['Prof', 'Dr', 'Mr', 'Mrs', 'Ms'], {
-    message: 'Role must be one of: Prof, Dr, Mr, Mrs, Ms'
+  title: z.enum(['Prof', 'Dr', 'Mr', 'Mrs', 'Ms'], {
+    message: 'Title must be one of: Prof, Dr, Mr, Mrs, Ms'
   }),
   specialization: z.string().optional(),
 });
@@ -265,6 +323,7 @@ admin.get('/check-email', authMiddleware, async (c) => {
     }
 
     const raw = (c.req.query('email') || '').trim();
+    const forRole = (c.req.query('userType') || '').trim();
     const email = sanitizeEmail(raw);
     // Basic shape check; the form does full validation, this is just a guard.
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -278,6 +337,18 @@ admin.get('/check-email', authMiddleware, async (c) => {
     });
 
     if (existing) {
+      const role =
+        forRole === 'student' || forRole === 'lecturer' ? forRole : (existing.userType as 'student' | 'lecturer');
+      if (canReissuePendingActivation(existing, role)) {
+        return c.json({
+          available: true,
+          valid: true,
+          reissue: true,
+          existingRole: existing.userType,
+          message:
+            'A pending account exists for this email (activation not completed). Submitting the form will resend activation credentials.',
+        });
+      }
       return c.json({
         available: false,
         valid: true,
@@ -328,7 +399,7 @@ admin.post('/students', authMiddleware, async (c) => {
       institutionId: new ObjectId(authUser.institutionId),
       email: { $regex: new RegExp(`^${escapeRegex(sanitizedData.email)}$`, 'i') },
     });
-    if (existingUser) {
+    if (existingUser && !canReissuePendingActivation(existingUser, 'student')) {
       const { body, status } = emailExistsResponse(existingUser, 'student');
       return c.json(body, status);
     }
@@ -348,15 +419,89 @@ admin.post('/students', authMiddleware, async (c) => {
       return c.json({ error: 'Institution not found' }, 404);
     }
 
-    const studentId = generateStudentId(institution.code);
-    
-    // Random temporary password — user must change on first login.
     const defaultPassword = AuthService.generateTemporaryPassword();
     const passwordHash = await AuthService.hashPassword(defaultPassword);
-
-    // Generate verification token (cryptographically secure)
     const verificationToken = AuthService.generateToken();
-    const tokenExpiresAt = new Date(Date.now() + APP_CONSTANTS.TOKEN.VERIFICATION_TOKEN_EXPIRY);
+
+    // Re-issue activation for a pending student whose link expired / was never used.
+    if (existingUser && canReissuePendingActivation(existingUser, 'student')) {
+      const studentId = existingUser.profile?.studentId || generateStudentId(institution.code);
+
+      await usersCollection.updateOne(
+        { _id: existingUser._id },
+        {
+          $set: {
+            passwordHash,
+            passwordHistory: [],
+            status: 'pending',
+            emailVerified: false,
+            isFirstLogin: true,
+            'profile.firstName': sanitizedData.firstName,
+            'profile.lastName': sanitizedData.lastName,
+            'profile.studentId': studentId,
+            'profile.department': sanitizedData.department,
+            'profile.year': sanitizedData.year,
+            'profile.avatar': `${sanitizedData.firstName.charAt(0)}${sanitizedData.lastName.charAt(0)}`.toUpperCase(),
+            updatedAt: new Date(),
+          },
+        },
+      );
+
+      await storeActivationOtp(
+        otpCollection,
+        sanitizedData.email,
+        adminUser.institutionId,
+        verificationToken,
+      );
+
+      try {
+        await sendStudentActivationEmail(
+          sanitizedData.email,
+          sanitizedData.firstName,
+          sanitizedData.lastName,
+          studentId,
+          defaultPassword,
+          verificationToken,
+          institution.name,
+        );
+      } catch (emailError: any) {
+        console.error('❌ Failed to resend student activation email:', emailError.message);
+        return c.json({
+          error: 'Failed to send activation email. Please try again or contact support.',
+          details: config.isDevelopment ? emailError.message : undefined,
+        }, 500);
+      }
+
+      writeAuditEvent({
+        institutionId: adminUser.institutionId,
+        action: 'user.student.activation_reissued',
+        actor: actorFromAuthUser(authUser, c.req.raw),
+        target: targetUser(existingUser),
+        outcome: 'success',
+        metadata: { studentId, reason: 'pending_unverified_recreate' },
+      });
+
+      const response: any = {
+        message: 'Activation email resent. The previous link is no longer valid.',
+        reissued: true,
+        student: {
+          id: existingUser._id,
+          email: sanitizedData.email,
+          studentId,
+          firstName: sanitizedData.firstName,
+          lastName: sanitizedData.lastName,
+          department: sanitizedData.department,
+          year: sanitizedData.year,
+          status: 'pending',
+        },
+      };
+      if (config.security.returnPasswordInResponse) {
+        response.student.defaultPassword = defaultPassword;
+      }
+      return c.json(response, 200);
+    }
+
+    const studentId = generateStudentId(institution.code);
 
     // Create student user
     const newStudent = {
@@ -382,15 +527,26 @@ admin.post('/students', authMiddleware, async (c) => {
 
     const result = await usersCollection.insertOne(newStudent);
 
-    // Store verification token
-    await otpCollection.insertOne({
-      email: sanitizedData.email,
-      code: verificationToken,
-      purpose: 'email_verification',
-      expiresAt: tokenExpiresAt,
-      used: false,
-      createdAt: new Date(),
+    writeAuditEvent({
+      institutionId: adminUser.institutionId,
+      action: 'user.student.created',
+      actor: actorFromAuthUser(authUser, c.req.raw),
+      target: targetUser({ ...newStudent, _id: result.insertedId }),
+      outcome: 'success',
+      metadata: {
+        studentId,
+        department: sanitizedData.department,
+        year: sanitizedData.year,
+      },
     });
+
+    // Store verification token
+    await storeActivationOtp(
+      otpCollection,
+      sanitizedData.email,
+      adminUser.institutionId,
+      verificationToken,
+    );
 
     // Send activation email (throw error if fails)
     try {
@@ -439,6 +595,16 @@ admin.post('/students', authMiddleware, async (c) => {
 
   } catch (error: any) {
     console.error('Create student error:', error.message);
+    try {
+      const authUser = c.get('user');
+      writeAuditEvent({
+        institutionId: authUser?.institutionId ? new ObjectId(authUser.institutionId) : undefined,
+        action: 'user.student.created',
+        actor: actorFromAuthUser(authUser, c.req.raw),
+        outcome: 'failure',
+        errorMessage: error?.message || 'unknown error',
+      });
+    } catch {}
     if (error instanceof z.ZodError) {
       return c.json({
         error: 'Validation error',
@@ -472,7 +638,7 @@ admin.post('/lecturers', authMiddleware, async (c) => {
       lastName: sanitizeString(data.lastName),
       email: sanitizeEmail(data.email),
       department: sanitizeString(data.department),
-      role: data.role,
+      title: data.title,
       specialization: data.specialization ? sanitizeString(data.specialization) : '',
     };
 
@@ -486,7 +652,7 @@ admin.post('/lecturers', authMiddleware, async (c) => {
       institutionId: new ObjectId(authUser.institutionId),
       email: { $regex: new RegExp(`^${escapeRegex(sanitizedData.email)}$`, 'i') },
     });
-    if (existingUser) {
+    if (existingUser && !canReissuePendingActivation(existingUser, 'lecturer')) {
       const { body, status } = emailExistsResponse(existingUser, 'lecturer');
       return c.json(body, status);
     }
@@ -506,15 +672,93 @@ admin.post('/lecturers', authMiddleware, async (c) => {
       return c.json({ error: 'Institution not found' }, 404);
     }
 
-    const lecturerId = generateLecturerId(institution.code);
-    
-    // Random temporary password — user must change on first login.
     const defaultPassword = AuthService.generateTemporaryPassword();
     const passwordHash = await AuthService.hashPassword(defaultPassword);
-
-    // Generate verification token (cryptographically secure)
     const verificationToken = AuthService.generateToken();
-    const tokenExpiresAt = new Date(Date.now() + APP_CONSTANTS.TOKEN.VERIFICATION_TOKEN_EXPIRY);
+
+    if (existingUser && canReissuePendingActivation(existingUser, 'lecturer')) {
+      const lecturerId = existingUser.profile?.lecturerId || generateLecturerId(institution.code);
+
+      await usersCollection.updateOne(
+        { _id: existingUser._id },
+        {
+          $set: {
+            passwordHash,
+            passwordHistory: [],
+            status: 'pending',
+            emailVerified: false,
+            isFirstLogin: true,
+            'profile.firstName': sanitizedData.firstName,
+            'profile.lastName': sanitizedData.lastName,
+            'profile.lecturerId': lecturerId,
+            'profile.department': sanitizedData.department,
+            'profile.title': sanitizedData.title,
+            'profile.specialization': sanitizedData.specialization,
+            'profile.avatar': `${sanitizedData.firstName.charAt(0)}${sanitizedData.lastName.charAt(0)}`.toUpperCase(),
+            updatedAt: new Date(),
+          },
+          $unset: { 'profile.role': '' },
+        },
+      );
+
+      await storeActivationOtp(
+        otpCollection,
+        sanitizedData.email,
+        adminUser.institutionId,
+        verificationToken,
+      );
+
+      try {
+        await sendLecturerActivationEmail(
+          sanitizedData.email,
+          sanitizedData.firstName,
+          sanitizedData.lastName,
+          lecturerId,
+          defaultPassword,
+          verificationToken,
+          institution.name,
+          sanitizedData.title,
+          sanitizedData.department,
+        );
+      } catch (emailError: any) {
+        console.error('❌ Failed to resend lecturer activation email:', emailError.message);
+        return c.json({
+          error: 'Failed to send activation email. Please try again or contact support.',
+          details: config.isDevelopment ? emailError.message : undefined,
+        }, 500);
+      }
+
+      writeAuditEvent({
+        institutionId: adminUser.institutionId,
+        action: 'user.lecturer.activation_reissued',
+        actor: actorFromAuthUser(authUser, c.req.raw),
+        target: targetUser(existingUser),
+        outcome: 'success',
+        metadata: { lecturerId, reason: 'pending_unverified_recreate' },
+      });
+
+      const response: any = {
+        message: 'Activation email resent. The previous link is no longer valid.',
+        reissued: true,
+        lecturer: {
+          id: existingUser._id,
+          email: sanitizedData.email,
+          lecturerId,
+          firstName: sanitizedData.firstName,
+          lastName: sanitizedData.lastName,
+          department: sanitizedData.department,
+          title: sanitizedData.title,
+          specialization: sanitizedData.specialization,
+          status: 'pending',
+        },
+      };
+      if (config.security.returnPasswordInResponse) {
+        response.lecturer.defaultPassword = defaultPassword;
+      }
+      return c.json(response, 200);
+    }
+
+    const lecturerId = generateLecturerId(institution.code);
 
     // Create lecturer user
     const newLecturer = {
@@ -531,7 +775,7 @@ admin.post('/lecturers', authMiddleware, async (c) => {
         lastName: sanitizedData.lastName,
         lecturerId,
         department: sanitizedData.department,
-        role: sanitizedData.role,
+        title: sanitizedData.title,
         specialization: sanitizedData.specialization,
         avatar: `${sanitizedData.firstName.charAt(0)}${sanitizedData.lastName.charAt(0)}`.toUpperCase(),
       },
@@ -541,15 +785,26 @@ admin.post('/lecturers', authMiddleware, async (c) => {
 
     const result = await usersCollection.insertOne(newLecturer);
 
-    // Store verification token
-    await otpCollection.insertOne({
-      email: sanitizedData.email,
-      code: verificationToken,
-      purpose: 'email_verification',
-      expiresAt: tokenExpiresAt,
-      used: false,
-      createdAt: new Date(),
+    writeAuditEvent({
+      institutionId: adminUser.institutionId,
+      action: 'user.lecturer.created',
+      actor: actorFromAuthUser(authUser, c.req.raw),
+      target: targetUser({ ...newLecturer, _id: result.insertedId }),
+      outcome: 'success',
+      metadata: {
+        lecturerId,
+        department: sanitizedData.department,
+        title: sanitizedData.title,
+      },
     });
+
+    // Store verification token
+    await storeActivationOtp(
+      otpCollection,
+      sanitizedData.email,
+      adminUser.institutionId,
+      verificationToken,
+    );
 
     // Send activation email (throw error if fails)
     try {
@@ -561,7 +816,7 @@ admin.post('/lecturers', authMiddleware, async (c) => {
         defaultPassword,
         verificationToken,
         institution.name,
-        sanitizedData.role,
+        sanitizedData.title,
         sanitizedData.department
       );
     } catch (emailError: any) {
@@ -586,7 +841,7 @@ admin.post('/lecturers', authMiddleware, async (c) => {
         firstName: sanitizedData.firstName,
         lastName: sanitizedData.lastName,
         department: sanitizedData.department,
-        role: sanitizedData.role,
+        title: sanitizedData.title,
         specialization: sanitizedData.specialization,
         status: 'pending',
       },
@@ -601,6 +856,16 @@ admin.post('/lecturers', authMiddleware, async (c) => {
 
   } catch (error: any) {
     console.error('Create lecturer error:', error.message);
+    try {
+      const authUser = c.get('user');
+      writeAuditEvent({
+        institutionId: authUser?.institutionId ? new ObjectId(authUser.institutionId) : undefined,
+        action: 'user.lecturer.created',
+        actor: actorFromAuthUser(authUser, c.req.raw),
+        outcome: 'failure',
+        errorMessage: error?.message || 'unknown error',
+      });
+    } catch {}
     if (error instanceof z.ZodError) {
       return c.json({
         error: 'Validation error',
@@ -718,7 +983,7 @@ admin.get('/lecturers', authMiddleware, async (c) => {
         firstName: lecturer.profile.firstName,
         lastName: lecturer.profile.lastName,
         department: lecturer.profile.department,
-        role: lecturer.profile.role,
+        title: getLecturerTitle(lecturer.profile),
         specialization: lecturer.profile.specialization,
         status: lecturer.status,
         emailVerified: lecturer.emailVerified,
@@ -736,6 +1001,140 @@ admin.get('/lecturers', authMiddleware, async (c) => {
   } catch (error: any) {
     console.error('Get lecturers error:', error.message);
     return c.json({ error: 'Failed to fetch lecturers' }, 500);
+  }
+});
+
+/** Remove a student or lecturer and their institution-scoped related records. */
+async function deleteInstitutionUser(
+  c: Context,
+  userType: 'student' | 'lecturer',
+  userIdParam: string,
+) {
+  const authUser = c.get('user');
+  if (authUser.userType !== 'admin') {
+    return c.json({ error: 'Access denied. Admin privileges required.' }, 403);
+  }
+
+  if (!ObjectId.isValid(userIdParam)) {
+    return c.json({ error: 'Invalid user ID' }, 400);
+  }
+
+  const userId = new ObjectId(userIdParam);
+  const institutionId = new ObjectId(authUser.institutionId);
+  const usersCollection = getUsersCollection();
+
+  const target = await usersCollection.findOne({
+    _id: userId,
+    institutionId,
+    userType,
+  });
+
+  if (!target) {
+    const label = userType === 'student' ? 'Student' : 'Lecturer';
+    return c.json({ error: `${label} not found` }, 404);
+  }
+
+  const userIdStr = target._id!.toString();
+  const db = getDatabase();
+
+  const cleanup: Promise<unknown>[] = [
+    usersCollection.deleteOne({ _id: userId }),
+    getOTPCollection().deleteMany({ email: target.email }),
+    invalidateAuthCache(userIdStr),
+  ];
+
+  if (userType === 'student') {
+    cleanup.push(
+      getEnrollmentsCollection().deleteMany({ studentId: userId }),
+      getAttendanceCollection().deleteMany({ studentId: userId }),
+      db.collection('session_presence').deleteMany({ studentId: userId }),
+      db.collection('assignment_submissions').deleteMany({ studentId: userIdStr }),
+      db.collection('quiz_attempts').deleteMany({ studentId: userIdStr }),
+    );
+  } else {
+    cleanup.push(
+      db.collection('courses').updateMany(
+        { institutionId, lecturerIds: userIdStr },
+        { $pull: { lecturerIds: userIdStr } },
+      ),
+      db.collection('schedules').deleteMany({ lecturerId: userIdStr }),
+    );
+  }
+
+  await Promise.all(cleanup);
+
+  writeAuditEvent({
+    institutionId,
+    action: userType === 'student' ? 'user.student.deleted' : 'user.lecturer.deleted',
+    actor: actorFromAuthUser(authUser, c.req.raw),
+    target: targetUser(target),
+    outcome: 'success',
+  });
+
+  const label = userType === 'student' ? 'Student' : 'Lecturer';
+  return c.json({ message: `${label} deleted successfully` });
+}
+
+// Delete student account (admin only, same institution)
+admin.delete('/students/:id', authMiddleware, async (c) => {
+  try {
+    return await deleteInstitutionUser(c, 'student', c.req.param('id'));
+  } catch (error: any) {
+    console.error('Delete student error:', error.message);
+    return c.json({ error: 'Failed to delete student' }, 500);
+  }
+});
+
+// Delete lecturer account (admin only, same institution)
+admin.delete('/lecturers/:id', authMiddleware, async (c) => {
+  try {
+    return await deleteInstitutionUser(c, 'lecturer', c.req.param('id'));
+  } catch (error: any) {
+    console.error('Delete lecturer error:', error.message);
+    return c.json({ error: 'Failed to delete lecturer' }, 500);
+  }
+});
+
+// Audit logs (admin only) — paginated, institution-scoped.
+admin.get('/audit-logs', authMiddleware, async (c) => {
+  try {
+    const authUser = c.get('user');
+    if (authUser.userType !== 'admin') {
+      return c.json({ error: 'Access denied. Admin privileges required.' }, 403);
+    }
+
+    const page = Math.max(1, Number(c.req.query('page') || 1));
+    const limit = Math.min(100, Math.max(10, Number(c.req.query('limit') || 25)));
+    const skip = (page - 1) * limit;
+
+    const action = (c.req.query('action') || '').trim();
+    const actorUserId = (c.req.query('actorUserId') || '').trim();
+
+    const institutionId = new ObjectId(authUser.institutionId);
+    const filter: Record<string, unknown> = { institutionId };
+    if (action) filter.action = action;
+    if (actorUserId) filter['actor.userId'] = actorUserId;
+
+    const db = getDatabase();
+    const col = db.collection('audit_logs');
+    const [items, total] = await Promise.all([
+      col.find(filter).sort({ timestamp: -1 }).skip(skip).limit(limit).toArray(),
+      col.countDocuments(filter),
+    ]);
+
+    return c.json({
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasMore: skip + items.length < total,
+      },
+    });
+  } catch (error: any) {
+    console.error('Get audit logs error:', error.message);
+    return c.json({ error: 'Failed to fetch audit logs' }, 500);
   }
 });
 

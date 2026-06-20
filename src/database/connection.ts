@@ -6,6 +6,7 @@ import type { Attendance } from '../models/attendance.model.js';
 import type { Wallet, Payment, ServicePayment } from '../models/payment.model.js';
 import type { CourseEnrollment } from '../models/enrollment.model.js';
 import type { AttendanceSession, SessionPresenceRecord } from '../models/session.model.js';
+import type { AuditEvent } from '../models/audit.model.js';
 
 let client: MongoClient;
 let db: Db;
@@ -96,12 +97,14 @@ export const getEnrollmentsCollection = () => getCollection<CourseEnrollment>('c
 export const getSessionsCollection = () => getCollection<AttendanceSession>('attendance_sessions');
 export const getSessionPresenceCollection = () =>
   getCollection<SessionPresenceRecord>('session_presence');
+export const getAuditLogsCollection = () => getCollection<AuditEvent>('audit_logs');
 
 async function createIndexes() {
   const institutionsCol = getInstitutionsCollection();
   const usersCol = getUsersCollection();
   const otpCol = getOTPCollection();
   const attendanceCol = getAttendanceCollection();
+  const auditLogsCol = getAuditLogsCollection();
   
   // Institution indexes
   await institutionsCol.createIndex({ code: 1 }, { unique: true });
@@ -138,6 +141,11 @@ async function createIndexes() {
   await otpCol.createIndex({ email: 1, purpose: 1 });
   await otpCol.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL index for auto-cleanup
   await otpCol.createIndex({ email: 1, code: 1, purpose: 1 }); // Compound index for faster lookups
+
+  // Audit logs — query by institution + time, actor, and action.
+  await auditLogsCol.createIndex({ institutionId: 1, timestamp: -1 });
+  await auditLogsCol.createIndex({ 'actor.userId': 1, timestamp: -1 });
+  await auditLogsCol.createIndex({ action: 1, timestamp: -1 });
   
   // Attendance indexes
   await attendanceCol.createIndex({ studentId: 1 });

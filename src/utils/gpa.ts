@@ -77,3 +77,11 @@ export function classifyCgpa(cgpa: number, scaleMax: number): string {
   if (ratio >= 0.5) return 'Fair';
   return 'Needs Improvement';
 }
+
+/** Pick the institution's custom scale when valid, otherwise the default. */
+export function resolveGradeScale(institution: { gradeScale?: unknown } | null | undefined): GradeScale {
+  if (institution && isValidScale((institution as { gradeScale?: unknown }).gradeScale)) {
+    return (institution as { gradeScale: GradeScale }).gradeScale;
+  }
+  return DEFAULT_GRADE_SCALE;
+}

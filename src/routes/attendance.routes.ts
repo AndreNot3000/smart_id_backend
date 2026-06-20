@@ -11,6 +11,7 @@ import {
   getAttendanceCollection,
 } from '../database/connection.js';
 import { sanitizeString } from '../utils/sanitize.js';
+import { formatLecturerName } from '../utils/profile.js';
 import type {
   AttendanceSession,
   AttendanceSessionType,
@@ -40,6 +41,7 @@ async function loadCallingUser(email: string) {
         institutionId: 1,
         'profile.firstName': 1,
         'profile.lastName': 1,
+        'profile.title': 1,
         'profile.role': 1,
         'profile.department': 1,
         'profile.lecturerId': 1,
@@ -304,14 +306,14 @@ attendance.get('/sessions', authMiddleware, async (c) => {
         ? db.collection('courses').find({ _id: { $in: courseIds } }).project({ department: 1 }).toArray()
         : Promise.resolve([] as any[]),
       lecturerIds.length
-        ? getUsersCollection().find({ _id: { $in: lecturerIds } }, { projection: { 'profile.firstName': 1, 'profile.lastName': 1, 'profile.role': 1 } }).toArray()
+        ? getUsersCollection().find({ _id: { $in: lecturerIds } }, { projection: { 'profile.firstName': 1, 'profile.lastName': 1, 'profile.title': 1, 'profile.role': 1 } }).toArray()
         : Promise.resolve([] as any[]),
     ]);
     const deptByCourse = new Map(courseDocs.map((c: any) => [c._id.toString(), c.department || '']));
     const nameByLecturer = new Map(
       lecturerDocs.map((l: any) => [
         l._id.toString(),
-        `${l.profile?.role ? l.profile.role + ' ' : ''}${l.profile?.firstName || ''} ${l.profile?.lastName || ''}`.trim(),
+        formatLecturerName(l.profile),
       ])
     );
 

@@ -4,7 +4,10 @@ import { ObjectId } from 'mongodb';
 import { getInstitutionsCollection, getUsersCollection, getOTPCollection } from '../database/connection.js';
 import { AuthService } from '../services/auth.services.js';
 import type { UserType } from '../models/user.model.js';
-import { loginRateLimiter } from '../middleware/rateLimit.middleware.js';
+import { loginRateLimiter, authRateLimiter } from '../middleware/rateLimit.middleware.js';
+import { getLecturerTitle } from '../utils/profile.js';
+import { invalidateAuthCache } from '../middleware/auth.middleware.js';
+import { actorFromAuthUser, writeAuditEvent } from '../services/audit-log.service.js';
 
 const auth = new Hono();
 
@@ -51,6 +54,11 @@ const resetPasswordSchema = z.object({
   path: ["confirmPassword"],
 });
 
+const verifyMfaSchema = z.object({
+  mfaToken: z.string().min(10),
+  code: z.string().min(6).max(16),
+});
+
 // Get available institutions (for signup dropdown)
 auth.get('/institutions', async (c) => {
   try {
@@ -76,7 +84,7 @@ auth.get('/institutions', async (c) => {
 });
 
 // Admin Registration endpoint (Admin account creation for existing institution)
-auth.post('/admin/register', loginRateLimiter, async (c) => {
+auth.post('/admin/register', authRateLimiter, async (c) => {
   try {
     const body = await c.req.json();
     const data = adminRegisterSchema.parse(body);
@@ -145,7 +153,7 @@ auth.post('/admin/register', loginRateLimiter, async (c) => {
     const adminResult = await usersCollection.insertOne(newAdmin);
 
     // Generate OTP for email verification
-    await AuthService.generateOTP(data.adminEmail, 'email_verification');
+    await AuthService.generateOTP(data.adminEmail, 'email_verification', institution._id!);
 
     return c.json({
       message: 'Admin account created successfully. Please check your email for verification code.',
@@ -251,6 +259,18 @@ auth.post('/login', loginRateLimiter, async (c) => {
 
     if (!user) {
       console.log('❌ User not found');
+      writeAuditEvent({
+        institutionId: institutionId,
+        action: 'auth.login',
+        actor: {
+          userType: data.userType,
+          ip: actorFromAuthUser(undefined, c.req.raw).ip,
+          userAgent: actorFromAuthUser(undefined, c.req.raw).userAgent,
+        },
+        target: { type: 'auth', email: normalizedEmail },
+        outcome: 'failure',
+        errorMessage: 'user not found',
+      });
       return c.json({ error: 'Invalid credentials' }, 401);
     }
 
@@ -265,12 +285,36 @@ auth.post('/login', loginRateLimiter, async (c) => {
     
     if (!isValidPassword) {
       console.log('❌ Invalid password');
+      writeAuditEvent({
+        institutionId: user.institutionId,
+        action: 'auth.login',
+        actor: {
+          userType: data.userType,
+          ip: actorFromAuthUser(undefined, c.req.raw).ip,
+          userAgent: actorFromAuthUser(undefined, c.req.raw).userAgent,
+        },
+        target: { type: 'auth', id: user._id?.toString(), email: user.email },
+        outcome: 'failure',
+        errorMessage: 'invalid password',
+      });
       return c.json({ error: 'Invalid credentials' }, 401);
     }
 
     // Check if email is verified
     if (!user.emailVerified) {
       console.log('❌ Email not verified');
+      writeAuditEvent({
+        institutionId: user.institutionId,
+        action: 'auth.login',
+        actor: {
+          userType: data.userType,
+          ip: actorFromAuthUser(undefined, c.req.raw).ip,
+          userAgent: actorFromAuthUser(undefined, c.req.raw).userAgent,
+        },
+        target: { type: 'auth', id: user._id?.toString(), email: user.email },
+        outcome: 'failure',
+        errorMessage: 'email not verified',
+      });
       return c.json({ 
         error: 'Email not verified', 
         requiresVerification: true,
@@ -281,18 +325,72 @@ auth.post('/login', loginRateLimiter, async (c) => {
     // Check if user is active
     if (user.status !== 'active') {
       console.log('❌ User not active, status:', user.status);
+      writeAuditEvent({
+        institutionId: user.institutionId,
+        action: 'auth.login',
+        actor: {
+          userType: data.userType,
+          ip: actorFromAuthUser(undefined, c.req.raw).ip,
+          userAgent: actorFromAuthUser(undefined, c.req.raw).userAgent,
+        },
+        target: { type: 'auth', id: user._id?.toString(), email: user.email },
+        outcome: 'failure',
+        errorMessage: `status: ${user.status}`,
+      });
       return c.json({ error: 'Account is not active' }, 403);
     }
 
-    // Generate tokens
+    // Admin MFA: require a second step when enabled, before issuing session tokens.
+    if (user.userType === 'admin' && (user as any).mfaEnabled) {
+      const mfaToken = AuthService.generateMfaChallengeToken(
+        user._id.toString(),
+        user.institutionId.toString(),
+        user.email,
+      );
+      writeAuditEvent({
+        institutionId: user.institutionId,
+        action: 'auth.login.mfa_challenge_issued',
+        actor: {
+          userId: user._id?.toString(),
+          email: user.email,
+          userType: 'admin',
+          ip: actorFromAuthUser(undefined, c.req.raw).ip,
+          userAgent: actorFromAuthUser(undefined, c.req.raw).userAgent,
+        },
+        target: { type: 'auth', id: user._id?.toString(), email: user.email },
+        outcome: 'success',
+      });
+      return c.json({
+        message: 'MFA required',
+        requiresMfa: true,
+        mfaToken,
+      });
+    }
+
+    // Generate tokens and persist refresh jti for rotation
     console.log('🎫 Generating tokens...');
-    const tokens = await AuthService.generateTokens(
+    const tokens = await AuthService.issueSessionTokens(
       user._id.toString(), 
       user.userType, 
       user.institutionId.toString(), 
-      user.email
+      user.email,
+      user.tokenVersion ?? 0
     );
     console.log('✅ Tokens generated successfully');
+
+    writeAuditEvent({
+      institutionId: user.institutionId,
+      action: 'auth.login',
+      actor: {
+        userId: user._id?.toString(),
+        email: user.email,
+        userType: user.userType,
+        ip: actorFromAuthUser(undefined, c.req.raw).ip,
+        userAgent: actorFromAuthUser(undefined, c.req.raw).userAgent,
+      },
+      target: { type: 'auth', id: user._id?.toString(), email: user.email },
+      outcome: 'success',
+    });
 
     console.log('🎉 Login successful');
     return c.json({
@@ -305,7 +403,7 @@ auth.post('/login', loginRateLimiter, async (c) => {
         avatar: user.profile.avatar,
         studentId: user.profile.studentId, // Include student ID in response
         lecturerId: user.profile.lecturerId, // Include lecturer ID in response
-        role: user.profile.role, // Include lecturer role in response
+        title: getLecturerTitle(user.profile),
         institutionId: user.institutionId.toString(),
         universityName: institution?.name || 'Unknown University',
         isFirstLogin: user.isFirstLogin || false // Flag for password change prompt
@@ -398,9 +496,15 @@ auth.get('/verify-email', async (c) => {
 
     console.log('✅ Valid verification record found, updating user...');
 
-    // Mark email as verified and activate user
+    // Mark email as verified and activate user. Scope by institution when the
+    // record carries it, so the right account is verified even when the same
+    // email exists at multiple institutions. (Legacy records fall back to email.)
+    const verifyFilter: Record<string, unknown> = { email: decodeURIComponent(email) };
+    if (verificationRecord.institutionId) {
+      verifyFilter.institutionId = verificationRecord.institutionId;
+    }
     const updateResult = await usersCollection.updateOne(
-      { email: decodeURIComponent(email) },
+      verifyFilter,
       { 
         $set: { 
           emailVerified: true, 
@@ -495,21 +599,47 @@ auth.get('/verify-email', async (c) => {
 });
 
 // Verify OTP endpoint (kept for admin/lecturer registration)
-auth.post('/verify-otp', loginRateLimiter, async (c) => {
+auth.post('/verify-otp', authRateLimiter, async (c) => {
   try {
     const body = await c.req.json();
     const data = verifyOTPSchema.parse(body);
 
-    const isValid = await AuthService.verifyOTP(data.email, data.code, 'email_verification');
-    
-    if (!isValid) {
+    const result = await AuthService.verifyOTPAttempt(
+      data.email,
+      data.code,
+      'email_verification',
+    );
+
+    if (!result.ok) {
+      if (result.reason === 'locked') {
+        return c.json(
+          {
+            error: 'Too many incorrect attempts. Please try again later or request a new code.',
+            retryAfter: result.retryAfter,
+          },
+          429,
+        );
+      }
+      if (result.reason === 'invalid' && result.attemptsRemaining !== undefined) {
+        return c.json(
+          {
+            error: `Invalid OTP code. ${result.attemptsRemaining} attempt(s) remaining.`,
+            attemptsRemaining: result.attemptsRemaining,
+          },
+          400,
+        );
+      }
       return c.json({ error: 'Invalid or expired OTP code' }, 400);
     }
 
-    // Mark email as verified and activate user
+    // Mark email as verified and activate user (scoped to institution when known)
     const usersCollection = getUsersCollection();
+    const otpFilter: Record<string, unknown> = { email: data.email };
+    if (result.institutionId) {
+      otpFilter.institutionId = result.institutionId;
+    }
     await usersCollection.updateOne(
-      { email: data.email },
+      otpFilter,
       { 
         $set: { 
           emailVerified: true, 
@@ -537,7 +667,7 @@ auth.post('/verify-otp', loginRateLimiter, async (c) => {
 });
 
 // Resend OTP endpoint
-auth.post('/resend-otp', loginRateLimiter, async (c) => {
+auth.post('/resend-otp', authRateLimiter, async (c) => {
   try {
     const { email } = await c.req.json();
     
@@ -553,7 +683,7 @@ auth.post('/resend-otp', loginRateLimiter, async (c) => {
       return c.json({ error: 'User not found' }, 404);
     }
 
-    await AuthService.generateOTP(email, 'email_verification');
+    await AuthService.generateOTP(email, 'email_verification', user.institutionId);
     
     return c.json({ message: 'OTP sent successfully' });
 
@@ -581,11 +711,41 @@ auth.post('/refresh-token', async (c) => {
       return c.json({ error: 'User not found' }, 404);
     }
 
-    const tokens = await AuthService.generateTokens(
+    // Reject refresh tokens that predate a logout / password change / reset.
+    const currentVersion = user.tokenVersion ?? 0;
+    if ((decoded.tokenVersion ?? 0) !== currentVersion) {
+      return c.json({ error: 'Session expired. Please log in again.' }, 401);
+    }
+
+    const storedId = user.refreshTokenId;
+    const tokenId = decoded.refreshTokenId as string | undefined;
+
+    if (storedId) {
+      if (!tokenId || tokenId !== storedId) {
+        // Reuse of an old refresh token — invalidate every session.
+        await usersCollection.updateOne(
+          { _id: user._id },
+          {
+            $inc: { tokenVersion: 1 },
+            $unset: { refreshTokenId: '' },
+            $set: { updatedAt: new Date() },
+          },
+        );
+        invalidateAuthCache(user._id.toString());
+        console.warn(`Refresh token reuse detected for user ${user.email}`);
+        return c.json({ error: 'Session expired. Please log in again.' }, 401);
+      }
+    } else if (tokenId) {
+      return c.json({ error: 'Session expired. Please log in again.' }, 401);
+    }
+    // Legacy refresh tokens without a jti are accepted once, then rotated below.
+
+    const tokens = await AuthService.issueSessionTokens(
       user._id.toString(),
       user.userType,
       user.institutionId.toString(),
-      user.email
+      user.email,
+      currentVersion
     );
 
     return c.json(tokens);
@@ -596,8 +756,110 @@ auth.post('/refresh-token', async (c) => {
   }
 });
 
+// Verify admin MFA and complete login (issue tokens)
+auth.post('/verify-mfa', authRateLimiter, async (c) => {
+  try {
+    const body = await c.req.json();
+    const data = verifyMfaSchema.parse(body);
+
+    const decoded = AuthService.verifyMfaChallengeToken(data.mfaToken);
+    const usersCollection = getUsersCollection();
+    const user = await usersCollection.findOne({ _id: ObjectId.createFromHexString(decoded.userId) });
+    if (!user || user.userType !== 'admin') {
+      return c.json({ error: 'Invalid MFA session. Please log in again.' }, 401);
+    }
+    if (!(user as any).mfaEnabled || !(user as any).mfaSecretEnc) {
+      return c.json({ error: 'MFA is not enabled for this account.' }, 400);
+    }
+
+    const secret = AuthService.decryptMfaSecret((user as any).mfaSecretEnc);
+    const isTotp = AuthService.verifyTotp(secret, data.code);
+
+    // Backup codes (one-time): accept and remove when matched.
+    let usedBackup = false;
+    if (!isTotp && Array.isArray((user as any).mfaBackupCodesHash) && (user as any).mfaBackupCodesHash.length) {
+      const hashes: string[] = (user as any).mfaBackupCodesHash;
+      for (const h of hashes) {
+        // reuse bcrypt compare from password lib
+        const ok = await AuthService.verifyPassword(data.code, h);
+        if (ok) {
+          usedBackup = true;
+          await usersCollection.updateOne(
+            { _id: user._id },
+            { $pull: { mfaBackupCodesHash: h }, $set: { updatedAt: new Date() } },
+          );
+          break;
+        }
+      }
+    }
+
+    if (!isTotp && !usedBackup) {
+      writeAuditEvent({
+        institutionId: user.institutionId,
+        action: 'auth.mfa.verify',
+        actor: {
+          userId: user._id?.toString(),
+          email: user.email,
+          userType: 'admin',
+          ip: actorFromAuthUser(undefined, c.req.raw).ip,
+          userAgent: actorFromAuthUser(undefined, c.req.raw).userAgent,
+        },
+        target: { type: 'auth', id: user._id?.toString(), email: user.email },
+        outcome: 'failure',
+        errorMessage: 'invalid mfa code',
+      });
+      return c.json({ error: 'Invalid authentication code' }, 401);
+    }
+
+    const tokens = await AuthService.issueSessionTokens(
+      user._id.toString(),
+      user.userType,
+      user.institutionId.toString(),
+      user.email,
+      user.tokenVersion ?? 0,
+    );
+
+    writeAuditEvent({
+      institutionId: user.institutionId,
+      action: 'auth.mfa.verify',
+      actor: {
+        userId: user._id?.toString(),
+        email: user.email,
+        userType: 'admin',
+        ip: actorFromAuthUser(undefined, c.req.raw).ip,
+        userAgent: actorFromAuthUser(undefined, c.req.raw).userAgent,
+      },
+      target: { type: 'auth', id: user._id?.toString(), email: user.email },
+      outcome: 'success',
+      metadata: { method: isTotp ? 'totp' : 'backup' },
+    });
+
+    return c.json({
+      message: 'Login successful',
+      user: {
+        id: user._id.toString(),
+        email: user.email,
+        userType: user.userType,
+        name: `${user.profile.firstName} ${user.profile.lastName}`,
+        avatar: user.profile.avatar,
+        title: getLecturerTitle(user.profile),
+        institutionId: user.institutionId.toString(),
+        universityName: (await getInstitutionsCollection().findOne({ _id: user.institutionId }))?.name || 'Unknown University',
+        isFirstLogin: user.isFirstLogin || false,
+      },
+      ...tokens,
+    });
+  } catch (error: any) {
+    console.error('Verify MFA error:', error);
+    if (error instanceof z.ZodError) {
+      return c.json({ error: 'Validation error', details: error.issues }, 400);
+    }
+    return c.json({ error: 'Failed to verify MFA' }, 500);
+  }
+});
+
 // Forgot Password - Request OTP
-auth.post('/forgot-password', loginRateLimiter, async (c) => {
+auth.post('/forgot-password', authRateLimiter, async (c) => {
   try {
     const body = await c.req.json();
     const data = forgotPasswordSchema.parse(body);
@@ -617,8 +879,8 @@ auth.post('/forgot-password', loginRateLimiter, async (c) => {
       });
     }
 
-    // Generate OTP for password reset
-    await AuthService.generateOTP(data.email, 'password_reset');
+    // Generate OTP for password reset (scoped to institution)
+    await AuthService.generateOTP(data.email, 'password_reset', user.institutionId);
 
     return c.json({ 
       message: 'Password reset code sent to your email.',
@@ -641,21 +903,47 @@ auth.post('/forgot-password', loginRateLimiter, async (c) => {
 });
 
 // Reset Password - Verify OTP and Set New Password
-auth.post('/reset-password', loginRateLimiter, async (c) => {
+auth.post('/reset-password', authRateLimiter, async (c) => {
   try {
     const body = await c.req.json();
     const data = resetPasswordSchema.parse(body);
 
-    // Verify OTP
-    const isValid = await AuthService.verifyOTP(data.email, data.code, 'password_reset');
-    
-    if (!isValid) {
+    // Verify OTP with attempt tracking
+    const otpResult = await AuthService.verifyOTPAttempt(
+      data.email,
+      data.code,
+      'password_reset',
+    );
+
+    if (!otpResult.ok) {
+      if (otpResult.reason === 'locked') {
+        return c.json(
+          {
+            error: 'Too many incorrect attempts. Please try again later or request a new code.',
+            retryAfter: otpResult.retryAfter,
+          },
+          429,
+        );
+      }
+      if (otpResult.reason === 'invalid' && otpResult.attemptsRemaining !== undefined) {
+        return c.json(
+          {
+            error: `Invalid reset code. ${otpResult.attemptsRemaining} attempt(s) remaining.`,
+            attemptsRemaining: otpResult.attemptsRemaining,
+          },
+          400,
+        );
+      }
       return c.json({ error: 'Invalid or expired reset code' }, 400);
     }
 
     // Get user to check current password and password history
     const usersCollection = getUsersCollection();
-    const user = await usersCollection.findOne({ email: data.email });
+    const userFilter: Record<string, unknown> = { email: data.email };
+    if (otpResult.institutionId) {
+      userFilter.institutionId = otpResult.institutionId;
+    }
+    const user = await usersCollection.findOne(userFilter);
 
     if (!user) {
       return c.json({ error: 'User not found' }, 404);
@@ -691,21 +979,27 @@ auth.post('/reset-password', loginRateLimiter, async (c) => {
       ...(user.passwordHistory || [])
     ].slice(0, 5); // Keep only last 5 passwords
 
-    // Update user password and history
+    // Update user password and history, and bump tokenVersion so every existing
+    // session (any device/tab) is invalidated after a reset — the user must log
+    // in again with the new password.
     const result = await usersCollection.updateOne(
-      { email: data.email },
+      { _id: user._id },
       { 
         $set: { 
           passwordHash: newPasswordHash,
           passwordHistory: updatedPasswordHistory,
           updatedAt: new Date()
-        } 
+        },
+        $inc: { tokenVersion: 1 },
+        $unset: { refreshTokenId: '' },
       }
     );
 
     if (result.matchedCount === 0) {
       return c.json({ error: 'User not found' }, 404);
     }
+
+    invalidateAuthCache(user._id.toString());
 
     return c.json({ 
       message: 'Password reset successfully. You can now login with your new password.' 

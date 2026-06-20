@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { ObjectId } from 'mongodb';
 import { getUsersCollection, getInstitutionsCollection } from '../database/connection.js';
+import { getLecturerTitle } from '../utils/profile.js';
 
 export interface QRCodeData {
   userId: string;
@@ -28,7 +29,7 @@ export interface LecturerQRInfo {
   lastName: string;
   email: string;
   department: string;
-  role: string;
+  title: string;
   specialization: string;
   avatar: string | null;
   institutionName: string;
@@ -147,7 +148,7 @@ export class QRService {
       lastName: lecturer.profile.lastName,
       email: lecturer.email,
       department: lecturer.profile.department || '',
-      role: lecturer.profile.role || '',
+      title: getLecturerTitle(lecturer.profile),
       specialization: lecturer.profile.specialization || '',
       avatar: lecturer.profile.avatar || null,
       institutionName: institution?.name || 'Unknown Institution',

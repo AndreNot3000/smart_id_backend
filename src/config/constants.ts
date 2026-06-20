@@ -26,6 +26,8 @@ export const APP_CONSTANTS = {
   OTP: {
     LENGTH: 6,
     EXPIRY: 10 * 60 * 1000, // 10 minutes in ms
+    MAX_ATTEMPTS: 5,
+    LOCKOUT_MS: 15 * 60 * 1000, // 15 minutes
   },
 
   // Rate Limiting

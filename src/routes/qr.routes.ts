@@ -11,6 +11,7 @@ import {
 } from '../database/connection.js';
 import { sanitizeString } from '../utils/sanitize.js';
 import { APP_CONSTANTS } from '../config/constants.js';
+import { getLecturerTitle } from '../utils/profile.js';
 
 const qr = new Hono();
 
@@ -79,7 +80,7 @@ qr.get('/generate', authMiddleware, async (c) => {
         avatar: user.profile.avatar || null, // Full base64 string or null if not set
         department: user.profile.department || '',
         year: user.profile.year || '',
-        role: user.profile.role || '',
+        title: getLecturerTitle(user.profile),
         institutionName: institution?.name || 'Unknown Institution',
       },
       instructions: 'This is your permanent ID QR code. Display it to be scanned by a lecturer or admin. Save this QR code - it never expires.',

@@ -20,7 +20,7 @@ declare module 'hono' {
 // Skips the per-request MongoDB round-trip on hot paths (e.g. rapid QR
 // scanning). Entries expire after 60s, so suspending or deactivating a
 // user takes effect within a minute without restarting the server.
-type CacheEntry = { valid: boolean; expiresAt: number };
+type CacheEntry = { valid: boolean; tokenVersion: number; expiresAt: number };
 const userCache = new Map<string, CacheEntry>();
 const USER_CACHE_TTL_MS = 60_000;
 const USER_CACHE_MAX = 5000;
@@ -53,6 +53,8 @@ export const authMiddleware = async (c: Context, next: Next) => {
     const token = authHeader.substring(7);
     const decoded = AuthService.verifyToken(token);
     const userId: string = decoded.userId;
+    // Tokens minted before this field existed have no claim → treat as 0.
+    const tokenVersion: number = decoded.tokenVersion ?? 0;
 
     const cached = userCache.get(userId);
     const now = Date.now();
@@ -61,18 +63,26 @@ export const authMiddleware = async (c: Context, next: Next) => {
       const usersCollection = getUsersCollection();
       const user = await usersCollection.findOne(
         { _id: new ObjectId(userId), status: 'active', emailVerified: true },
-        { projection: { _id: 1 } }
+        { projection: { _id: 1, tokenVersion: 1 } }
       );
 
       if (!user) {
-        userCache.set(userId, { valid: false, expiresAt: now + USER_CACHE_TTL_MS });
+        userCache.set(userId, { valid: false, tokenVersion: 0, expiresAt: now + USER_CACHE_TTL_MS });
         return c.json({ error: 'User not found or inactive' }, 401);
       }
 
-      userCache.set(userId, { valid: true, expiresAt: now + USER_CACHE_TTL_MS });
+      const currentVersion = user.tokenVersion ?? 0;
+      userCache.set(userId, { valid: true, tokenVersion: currentVersion, expiresAt: now + USER_CACHE_TTL_MS });
       pruneCache();
+
+      // Token was invalidated server-side (logout / password change / reset).
+      if (tokenVersion !== currentVersion) {
+        return c.json({ error: 'Session expired. Please log in again.' }, 401);
+      }
     } else if (!cached.valid) {
       return c.json({ error: 'User not found or inactive' }, 401);
+    } else if (tokenVersion !== cached.tokenVersion) {
+      return c.json({ error: 'Session expired. Please log in again.' }, 401);
     }
 
     c.set('user', {

@@ -7,6 +7,7 @@ import {
   validateScheduleNotInPast,
   validateScheduleTimeRange,
 } from '../utils/schedule-time.js';
+import { formatLecturerName } from '../utils/profile.js';
 
 const schedule = new Hono();
 
@@ -175,7 +176,7 @@ schedule.post('/', authMiddleware, async (c) => {
     const lecturer = await usersCollection.findOne({ email: user.email });
     if (!lecturer?.profile?.department) return c.json({ error: 'Lecturer profile or department not found' }, 404);
 
-    const lecturerName = `${lecturer.profile.role || ''} ${lecturer.profile.firstName} ${lecturer.profile.lastName}`.trim();
+    const lecturerName = formatLecturerName(lecturer.profile);
 
     // Lecturers may only schedule classes for courses assigned to them.
     const assignedCourse = await findAssignedCourse({

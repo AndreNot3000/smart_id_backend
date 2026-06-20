@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { ObjectId } from 'mongodb';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 import { getDatabase } from '../database/connection.js';
+import { formatLecturerName } from '../utils/profile.js';
 
 const quiz = new Hono();
 
@@ -99,7 +100,7 @@ quiz.post('/', authMiddleware, async (c) => {
         releaseResults: settings?.releaseResults ?? false,
       },
       lecturerId: lecturer._id.toString(),
-      lecturerName: `${lecturer.profile?.role || ''} ${lecturer.profile?.firstName} ${lecturer.profile?.lastName}`.trim(),
+      lecturerName: formatLecturerName(lecturer.profile),
       institutionId: user.institutionId,
       department: (courseDoc as any).department,
       level: (courseDoc as any).level,
