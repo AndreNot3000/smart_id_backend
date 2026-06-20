@@ -340,8 +340,16 @@ auth.post('/login', loginRateLimiter, async (c) => {
       return c.json({ error: 'Account is not active' }, 403);
     }
 
-    // Admin MFA: require a second step when enabled, before issuing session tokens.
-    if (user.userType === 'admin' && (user as any).mfaEnabled) {
+    // Admin MFA: optional second step — only enforced when MFA_ENFORCE=true.
+    // This keeps production login working if the live frontend hasn't picked up
+    // the MFA UI yet (shared Atlas DB may already have mfaEnabled on admins).
+    const mfaEnforce = process.env.MFA_ENFORCE === 'true';
+    if (
+      mfaEnforce &&
+      user.userType === 'admin' &&
+      (user as any).mfaEnabled &&
+      (user as any).mfaSecretEnc
+    ) {
       const mfaToken = AuthService.generateMfaChallengeToken(
         user._id.toString(),
         user.institutionId.toString(),
